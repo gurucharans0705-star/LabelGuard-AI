@@ -1,0 +1,16 @@
+# LabelGuard AI dependencies.
+# Lower bounds are the versions this project was developed and tested with.
+streamlit>=1.66
+pandas>=2.1
+pymupdf>=1.24.3
+pytesseract>=0.3.10
+pillow>=10.0
+reportlab>=4.0
+pytest>=8.0
+
+# Added on later days, when the feature that needs them is built:
+#   Day 3: opencv-python-headless   (artwork comparison)
+#   Day 4: anthropic                (optional AI explanations)
+#
+# OCR also needs the Tesseract program itself (a separate Windows installer, not a pip package).
+# The app works without it; only scanned (image-only) PDFs need it. See README.md.

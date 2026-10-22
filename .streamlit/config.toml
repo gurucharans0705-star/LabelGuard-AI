@@ -1,0 +1,14 @@
+[browser]
+# Label documents are sensitive; do not send usage statistics anywhere.
+gatherUsageStats = false
+
+[server]
+# Keep in step with LABELGUARD_MAX_UPLOAD_MB (default 25).
+maxUploadSize = 25
+
+[theme]
+base = "light"
+primaryColor = "#1F4E79"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF3F9"
+textColor = "#1B2A3A"
