@@ -64,6 +64,8 @@ class ExtractedField:
 class LabelFields:
     fields: dict[str, ExtractedField] = field(default_factory=dict)
     languages: tuple[LanguageGuess, ...] = ()
+    # Fields whose keyword is printed (e.g. "LOT:") with no value after it. The hit's value is "".
+    empty: dict[str, tuple[FieldHit, ...]] = field(default_factory=dict)
 
     def get(self, key: str) -> ExtractedField:
         return self.fields.get(key, ExtractedField(key))

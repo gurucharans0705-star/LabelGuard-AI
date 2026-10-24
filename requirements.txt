@@ -7,9 +7,11 @@ pytesseract>=0.3.10
 pillow>=10.0
 reportlab>=4.0
 pytest>=8.0
+numpy>=1.26
+opencv-python-headless>=4.9
+zxing-cpp>=2.2
 
 # Added on later days, when the feature that needs them is built:
-#   Day 3: opencv-python-headless   (artwork comparison)
 #   Day 4: anthropic                (optional AI explanations)
 #
 # OCR also needs the Tesseract program itself (a separate Windows installer, not a pip package).

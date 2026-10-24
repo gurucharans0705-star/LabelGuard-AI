@@ -295,6 +295,42 @@ def _find_sterilization(lines: list[TextLine]) -> tuple[FieldHit, ...]:
     return tuple(collector.hits)
 
 
+# --- Keywords printed without a value ("LOT:" and nothing after it) ---------------------
+_EMPTY_LABEL_RES: dict[str, re.Pattern] = {
+    "product_identifier": re.compile(
+        r"^\W*(?:REF|REFERENCE|CAT(?:ALOG(?:UE)?)?\.?(?:\s*(?:NO\.?|NUMBER|#))?|MODEL(?:\s*(?:NO\.?|NUMBER|#))?"
+        r"|PART\s*(?:NO\.?|NUMBER|#)|P/N|ITEM\s*(?:NO\.?|NUMBER|#)|SKU)\W*$", _I),
+    "udi": re.compile(r"^\W*UDI(?:[-\s]?(?:DI|PI))?\W*$", _I),
+    "lot_number": re.compile(r"^\W*(?:LOT|BATCH)(?:\s*(?:NO\.?|NUMBER|#|CODE))?\W*$", _I),
+    "expiration_date": re.compile(r"^\W*(?:EXP(?:IRY|IRATION|IRES)?\.?(?:\s*DATE)?|USE[\s-]+BY|BEST\s+BEFORE)\W*$", _I),
+    "manufacturing_date": re.compile(
+        r"^\W*(?:MFG|MFD|MANUFACTURED|DATE\s+OF\s+MANUFACTURE|MANUFACTURE\s+DATE|PRODUCTION\s+DATE|DOM)(?:\s*DATE)?\W*$", _I),
+    "manufacturer": re.compile(r"^\W*(?:LEGAL\s+MANUFACTURER|MANUFACTURER|MFR\.?)\W*$", _I),
+}
+
+
+def _find_empty_labels(lines: list[TextLine], found: dict[str, tuple[FieldHit, ...]]) -> dict[str, tuple[FieldHit, ...]]:
+    """Find keywords that are printed with no value, for fields where no value was detected.
+
+    The next line is checked first: if it could be the value (plain text on the same page) the
+    keyword is not reported as empty, because the value may simply sit on the following line.
+    """
+    empty: dict[str, list[FieldHit]] = {}
+    for index, line in enumerate(lines):
+        for key, regex in _EMPTY_LABEL_RES.items():
+            if found.get(key) or not regex.match(line.text):
+                continue
+            following = lines[index + 1] if index + 1 < len(lines) else None
+            if following is not None and following.page == line.page and not (
+                _is_field_line(following.text)
+                or _WARNING_HEADING_RE.match(following.text)
+                or _ALL_CAPS_HEADING_RE.match(following.text)
+            ):
+                continue  # could be a value on the next line; do not call this field empty
+            empty.setdefault(key, []).append(FieldHit("", line.text, line.page, line.bbox, "empty label"))
+    return {key: tuple(hits) for key, hits in empty.items()}
+
+
 # --- Public API -------------------------------------------------------------------
 def extract_fields(document: ExtractedDocument) -> LabelFields:
     """Extract label fields (with evidence) from an extracted document."""
@@ -313,4 +349,6 @@ def extract_fields(document: ExtractedDocument) -> LabelFields:
         "sterilization": _find_sterilization(lines),
     }
     fields = {key: ExtractedField(key, found[key]) for key in FIELD_LABELS}
-    return LabelFields(fields=fields, languages=detect_languages(document.full_text))
+    return LabelFields(
+        fields=fields, languages=detect_languages(document.full_text), empty=_find_empty_labels(lines, found)
+    )

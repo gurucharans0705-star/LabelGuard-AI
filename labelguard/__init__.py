@@ -1,3 +1,6 @@
-"""LabelGuard AI - medical device label verification and change-impact platform."""
 
-__version__ = "0.1.0"
+"""LabelGuard AI package."""
+
+from .version import __version__
+
+__all__ = ["__version__"]

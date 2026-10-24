@@ -1,0 +1,416 @@
+# LabelGuard AI - validation rules
+#
+# Each [[rule]] below is one check. Edit this file in any text editor, save it, and run a new
+# analysis (or press "Reload rules" on the Rules page). A mistake in this file is reported
+# with the rule id and the problem; it never changes behaviour silently.
+#
+# IMPORTANT: a rule finds a *discrepancy* or something that could not be verified. It does not
+# decide whether a label is compliant. "severity" is a workflow priority that tells the reviewer
+# what to look at first; it is not a regulatory classification and not proof of a violation.
+#
+# Settings shared by every rule
+#   id           unique name, e.g. "R-ID-001"
+#   name         short title shown in the dashboard
+#   description  what the rule looks for and why it matters to a reviewer
+#   type         what kind of check this is (see "Rule types" below)
+#   severity     critical_review | high | medium | low | informational
+#   category     optional; one of: added_content, removed_content, modified_content,
+#                missing_expected_field, identifier_mismatch, potential_warning_discrepancy,
+#                potential_artwork_discrepancy, consistency_issue
+#                (each type has a sensible default; field_change/text_change choose by change kind)
+#   action       the recommended reviewer action, shown with every finding from this rule
+#   enabled      true or false; disabled rules are listed but not evaluated
+#
+# Rule types and their extra settings
+#   required_field       field, applies_to ("both" | "approved" | "revised")
+#                        The field must be detected on the label(s).
+#   field_not_empty      fields (list), applies_to
+#                        A keyword such as "LOT:" must not be printed with no value after it.
+#   field_change         field, change_kinds (any of "modified", "added", "removed")
+#                        A detected value changed between the approved and revised label.
+#   text_change          kind ("added" | "removed" | "modified")
+#                        Text differences that no field finding already explains.
+#   page_count_changed   (no extra settings)
+#   udi_check_digit      applies_to
+#                        The GTIN check digit inside the printed UDI text verifies.
+#                        (Checks the number's internal consistency only.)
+#   date_order           (no extra settings)
+#                        The expiration date is not earlier than the manufacturing date.
+#   barcode_text_match   applies_to
+#                        A decoded barcode contains the printed UDI-DI. If no barcode could be
+#                        decoded, the result is "not evaluated"; it is never reported as verified.
+#   barcode_changed      (no extra settings)
+#                        The decoded barcode value differs between the two labels.
+#   visual_difference    (no extra settings)
+#                        A page differs visually in an area that text changes do not explain.
+#
+# Field names: product_name, manufacturer, product_identifier, udi, lot_number,
+#              expiration_date, manufacturing_date, safety_warnings, storage_instructions,
+#              sterilization
+
+# ---------------------------------------------------------------- Identifiers
+
+[[rule]]
+id = "R-ID-001"
+name = "Product identifier differs between versions"
+description = "The REF / catalog / model number on the revised label is different from the approved label."
+type = "field_change"
+field = "product_identifier"
+change_kinds = ["modified", "added", "removed"]
+category = "identifier_mismatch"
+severity = "critical_review"
+action = "Check the new identifier against the change request and the product master data before release."
+
+[[rule]]
+id = "R-ID-002"
+name = "UDI text differs between versions"
+description = "The printed UDI (device identifier and any production identifiers) changed."
+type = "field_change"
+field = "udi"
+change_kinds = ["modified", "added", "removed"]
+category = "identifier_mismatch"
+severity = "critical_review"
+action = "Confirm the new UDI with the registered device data and check that the barcode was regenerated to match."
+
+[[rule]]
+id = "R-ID-003"
+name = "Decoded barcode differs between versions"
+description = "A barcode that could be decoded on both labels has a different value."
+type = "barcode_changed"
+category = "identifier_mismatch"
+severity = "high"
+action = "Scan the revised barcode on the final artwork and confirm it carries the intended identifier."
+
+[[rule]]
+id = "R-ID-004"
+name = "Barcode does not contain the printed UDI-DI"
+description = "A barcode was decoded, but it does not contain the device identifier printed next to it."
+type = "barcode_text_match"
+applies_to = "both"
+category = "identifier_mismatch"
+severity = "high"
+action = "Check the artwork: the barcode and the human-readable identifier must come from the same data."
+
+[[rule]]
+id = "R-ID-005"
+name = "UDI check digit does not verify"
+description = "The GTIN inside the printed UDI text fails the GS1 check-digit calculation, which usually means a typing error."
+type = "udi_check_digit"
+applies_to = "both"
+category = "identifier_mismatch"
+severity = "medium"
+action = "Compare the printed number with the source identifier record and correct any typing error."
+
+# ---------------------------------------------------------------- Names and manufacturer
+
+[[rule]]
+id = "R-MFR-001"
+name = "Manufacturer details differ between versions"
+description = "The manufacturer name or address text changed."
+type = "field_change"
+field = "manufacturer"
+change_kinds = ["modified", "added", "removed"]
+category = "modified_content"
+severity = "high"
+action = "Confirm that the change in manufacturer details is intended and matches the current legal manufacturer record."
+
+[[rule]]
+id = "R-NAME-001"
+name = "Product name differs between versions"
+description = "The product name or description changed."
+type = "field_change"
+field = "product_name"
+change_kinds = ["modified", "added", "removed"]
+category = "modified_content"
+severity = "medium"
+action = "Confirm the new name or description is intended (for example a size or variant change)."
+
+# ---------------------------------------------------------------- Safety warnings
+
+[[rule]]
+id = "R-WARN-001"
+name = "Warning statement appears to be removed"
+description = "A warning statement on the approved label has no matching statement on the revised label."
+type = "field_change"
+field = "safety_warnings"
+change_kinds = ["removed"]
+category = "potential_warning_discrepancy"
+severity = "critical_review"
+action = "Check whether the removal is part of an approved change. If not, restore the statement. The text may also have been reworded or moved; compare with the revised label."
+
+[[rule]]
+id = "R-WARN-002"
+name = "Warning statement wording changed"
+description = "A warning statement was reworded between versions."
+type = "field_change"
+field = "safety_warnings"
+change_kinds = ["modified"]
+category = "potential_warning_discrepancy"
+severity = "high"
+action = "Compare the old and new wording word by word and confirm the change is approved and keeps the intended meaning."
+
+[[rule]]
+id = "R-WARN-003"
+name = "Warning statement added"
+description = "A new warning statement appears on the revised label."
+type = "field_change"
+field = "safety_warnings"
+change_kinds = ["added"]
+category = "added_content"
+severity = "low"
+action = "Confirm the new statement is intended and approved."
+
+# ---------------------------------------------------------------- Storage and sterilization
+
+[[rule]]
+id = "R-STOR-001"
+name = "Storage or handling instructions changed"
+description = "A storage or handling statement was changed or removed."
+type = "field_change"
+field = "storage_instructions"
+change_kinds = ["modified", "removed"]
+category = "modified_content"
+severity = "high"
+action = "Confirm the new storage conditions are supported by the product's stability data and approved change."
+
+[[rule]]
+id = "R-STOR-002"
+name = "Storage or handling instruction added"
+description = "A new storage or handling statement appears on the revised label."
+type = "field_change"
+field = "storage_instructions"
+change_kinds = ["added"]
+severity = "low"
+action = "Confirm the new statement is intended and approved."
+
+[[rule]]
+id = "R-STER-001"
+name = "Sterilization information changed"
+description = "A sterilization statement was changed or removed."
+type = "field_change"
+field = "sterilization"
+change_kinds = ["modified", "removed"]
+category = "modified_content"
+severity = "high"
+action = "Confirm the sterilization method and statement against the validated process before release."
+
+[[rule]]
+id = "R-STER-002"
+name = "Sterilization statement added"
+description = "A sterilization statement appears on the revised label that was not on the approved label."
+type = "field_change"
+field = "sterilization"
+change_kinds = ["added"]
+severity = "low"
+action = "Confirm the statement is intended and approved."
+
+# ---------------------------------------------------------------- Dates and batch fields
+
+[[rule]]
+id = "R-DATE-001"
+name = "Expiration date differs between versions"
+description = "The printed expiration date changed or was removed."
+type = "field_change"
+field = "expiration_date"
+change_kinds = ["modified", "added", "removed"]
+category = "modified_content"
+severity = "medium"
+action = "Confirm whether a different date is expected (for example a new lot or shelf-life change)."
+
+[[rule]]
+id = "R-DATE-002"
+name = "Manufacturing date differs between versions"
+description = "The printed manufacturing date changed or was removed."
+type = "field_change"
+field = "manufacturing_date"
+change_kinds = ["modified", "added", "removed"]
+category = "modified_content"
+severity = "medium"
+action = "Confirm whether a different date is expected (for example a new lot)."
+
+[[rule]]
+id = "R-LOT-001"
+name = "Lot or batch number differs between versions"
+description = "The printed lot or batch number changed or was removed."
+type = "field_change"
+field = "lot_number"
+change_kinds = ["modified", "added", "removed"]
+category = "modified_content"
+severity = "medium"
+action = "Confirm whether a different lot number is expected. Template labels often carry a placeholder."
+
+[[rule]]
+id = "R-DATE-003"
+name = "Expiration date is not after the manufacturing date"
+description = "Both dates were read and the expiration date is earlier than the manufacturing date."
+type = "date_order"
+category = "consistency_issue"
+severity = "medium"
+action = "Check both dates on the source artwork; one of them is probably mistyped or misread."
+
+# ---------------------------------------------------------------- Required fields
+# These fire when a field cannot be found. "Not detected" can also mean the wording is unusual
+# or the page is a poor scan, so the action asks the reviewer to look at the label itself.
+
+[[rule]]
+id = "R-REQ-001"
+name = "Product identifier not detected"
+description = "No REF / catalog / model number was found."
+type = "required_field"
+field = "product_identifier"
+applies_to = "both"
+severity = "high"
+action = "Look for the identifier on the label. It may be absent, worded unusually, or unreadable."
+
+[[rule]]
+id = "R-REQ-002"
+name = "UDI not detected"
+description = "No printed UDI text was found."
+type = "required_field"
+field = "udi"
+applies_to = "both"
+severity = "high"
+action = "Look for the UDI on the label. It may be absent, worded unusually, or only present as a barcode."
+
+[[rule]]
+id = "R-REQ-003"
+name = "Safety warnings not detected"
+description = "No warning statements were found."
+type = "required_field"
+field = "safety_warnings"
+applies_to = "both"
+severity = "high"
+action = "Check the label for its warning statements. They may be absent, worded unusually, or unreadable."
+
+[[rule]]
+id = "R-REQ-004"
+name = "Manufacturer not detected"
+description = "No manufacturer name was found."
+type = "required_field"
+field = "manufacturer"
+applies_to = "both"
+severity = "medium"
+action = "Look for the manufacturer details on the label."
+
+[[rule]]
+id = "R-REQ-005"
+name = "Lot or batch number not detected"
+description = "No lot or batch number was found."
+type = "required_field"
+field = "lot_number"
+applies_to = "both"
+severity = "medium"
+action = "Look for the lot or batch number on the label."
+
+[[rule]]
+id = "R-REQ-006"
+name = "Expiration date not detected"
+description = "No expiration date was found."
+type = "required_field"
+field = "expiration_date"
+applies_to = "both"
+severity = "medium"
+action = "Look for the expiration date on the label."
+
+[[rule]]
+id = "R-REQ-007"
+name = "Product name not detected"
+description = "No product name could be identified."
+type = "required_field"
+field = "product_name"
+applies_to = "both"
+severity = "medium"
+action = "Look for the product name on the label."
+
+# Not required by default because they do not apply to every device. Set enabled = true to require them.
+
+[[rule]]
+id = "R-REQ-008"
+name = "Manufacturing date not detected"
+description = "No manufacturing date was found."
+type = "required_field"
+field = "manufacturing_date"
+applies_to = "both"
+severity = "low"
+action = "Look for the manufacturing date on the label."
+enabled = false
+
+[[rule]]
+id = "R-REQ-009"
+name = "Storage instructions not detected"
+description = "No storage or handling statement was found."
+type = "required_field"
+field = "storage_instructions"
+applies_to = "both"
+severity = "low"
+action = "Look for storage or handling statements on the label."
+enabled = false
+
+[[rule]]
+id = "R-REQ-010"
+name = "Sterilization information not detected"
+description = "No sterilization statement was found."
+type = "required_field"
+field = "sterilization"
+applies_to = "both"
+severity = "low"
+action = "Look for the sterilization statement on the label."
+enabled = false
+
+[[rule]]
+id = "R-EMPTY-001"
+name = "Field keyword printed without a value"
+description = "A keyword such as LOT: or EXP: is printed but nothing follows it."
+type = "field_not_empty"
+fields = ["product_identifier", "udi", "lot_number", "expiration_date", "manufacturing_date", "manufacturer"]
+applies_to = "both"
+category = "missing_expected_field"
+severity = "high"
+action = "Check the artwork: a data field was probably left unfilled, for example a placeholder that was never replaced."
+
+# ---------------------------------------------------------------- General text and layout
+
+[[rule]]
+id = "R-TEXT-001"
+name = "Text added"
+description = "Text appears on the revised label that is not part of a field finding."
+type = "text_change"
+kind = "added"
+severity = "low"
+action = "Confirm the added text is intended and approved."
+
+[[rule]]
+id = "R-TEXT-002"
+name = "Text removed"
+description = "Text on the approved label is missing from the revised label and is not part of a field finding."
+type = "text_change"
+kind = "removed"
+severity = "medium"
+action = "Confirm the removal is intended. Check that no required information was lost."
+
+[[rule]]
+id = "R-TEXT-003"
+name = "Text modified"
+description = "A line of text was reworded and is not part of a field finding."
+type = "text_change"
+kind = "modified"
+severity = "medium"
+action = "Compare the old and new wording and confirm the change is intended and approved."
+
+[[rule]]
+id = "R-PAGE-001"
+name = "Page count differs"
+description = "The two documents have a different number of pages."
+type = "page_count_changed"
+category = "modified_content"
+severity = "medium"
+action = "Check what was added or removed. Visual comparison can only compare pages that exist in both documents."
+
+[[rule]]
+id = "R-ART-001"
+name = "Visual difference not explained by text changes"
+description = "A page looks different in an area that the detected text changes do not account for, such as a logo, symbol, colour, border or barcode graphic."
+type = "visual_difference"
+category = "potential_artwork_discrepancy"
+severity = "medium"
+action = "Open the visual comparison and look at the highlighted areas. A layout change may be intentional; confirm it is."

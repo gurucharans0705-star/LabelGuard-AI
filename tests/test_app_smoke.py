@@ -31,7 +31,7 @@ def texts(elements) -> str:
 def test_dashboard_loads_with_navigation():
     at = new_app()
     assert not at.exception
-    assert at.radio(key="nav").options == ["Dashboard", "Upload & Analyze", "Results"]
+    assert at.radio(key="nav").options == ["Dashboard", "Upload & Analyze", "Findings", "Visual Comparison", "Results", "Rules"]
     assert {m.label for m in at.metric} >= {"Approved label", "Revised label", "Analysis", "OCR engine"}
 
 
@@ -59,7 +59,7 @@ def test_both_labels_can_be_uploaded_and_analysed(approved_pdf, revised_pdf):
 
     at.button(key="start_analysis").click().run()
     assert not at.exception
-    assert at.radio(key="nav").value == "Results"
+    assert at.radio(key="nav").value == "Findings"
     analysis = at.session_state["analysis"]
     assert analysis.comparison.changed_fields == 5
     assert analysis.approved.document.filename == "approved_label_v1.pdf"
@@ -82,7 +82,7 @@ def test_samples_can_be_loaded_and_compared():
     assert not at.exception
     at.button(key="start_analysis").click().run()
     assert not at.exception
-    assert at.radio(key="nav").value == "Results"
+    assert at.radio(key="nav").value == "Findings"
     assert at.session_state["analysis"].comparison.changed_fields == 5
 
 
@@ -91,6 +91,7 @@ def test_analysis_is_logged_and_shown_on_the_dashboard():
     at.button(key="load_samples").click().run()
     at.button(key="start_analysis").click().run()
     assert at.session_state["run_id"] == 1
+    open_page(at, "Results")
     assert "run #1" in " ".join(caption.value for caption in at.caption)
     open_page(at, "Dashboard")
     assert not at.exception
@@ -107,7 +108,7 @@ def test_a_broken_run_log_never_blocks_the_analysis(tmp_path, monkeypatch):
     assert not at.exception
     assert at.session_state["analysis"].comparison.changed_fields == 5
     assert "run_id" not in at.session_state
-    assert "could not be added to the run log" in texts(at.warning)
+    assert "this run was not logged" in texts(at.warning)
     open_page(at, "Dashboard")
     assert not at.exception
 
@@ -122,7 +123,124 @@ def test_changing_a_file_discards_the_old_analysis():
     assert "analysis" not in at.session_state
 
 
-@pytest.mark.parametrize("page", ["Dashboard", "Upload & Analyze", "Results"])
+@pytest.mark.parametrize("page", ["Dashboard", "Upload & Analyze", "Findings", "Visual Comparison", "Results", "Rules"])
 def test_every_page_renders_without_errors(page):
     at = open_page(new_app(), page)
     assert not at.exception
+
+
+# --- Day 2 pages ---------------------------------------------------------------------------------------
+def analysed_app() -> AppTest:
+    at = open_page(new_app(), "Upload & Analyze")
+    at.button(key="load_samples").click().run()
+    at.button(key="start_analysis").click().run()
+    assert not at.exception
+    return at
+
+
+def test_pages_show_empty_states_before_any_analysis():
+    for page in ("Findings", "Visual Comparison"):
+        at = open_page(new_app(), page)
+        assert not at.exception
+        assert "No analysis yet" in texts(at.info)
+
+
+def test_findings_page_shows_counts_table_and_details():
+    at = analysed_app()
+    assert at.radio(key="nav").value == "Findings"
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Critical review"] == "3" and metrics["High"] == "3" and metrics["Medium"] == "2"
+    assert len(at.dataframe) >= 1
+    assert len(at.expander) >= 8
+
+
+def test_filters_narrow_the_findings():
+    at = analysed_app()
+    at.multiselect(key="filter_severity").set_value(["critical_review"]).run()
+    assert not at.exception
+    assert "Showing **3** of 8" in texts(at.markdown)
+    at.multiselect(key="filter_severity").set_value([]).run()
+    assert "No finding matches" in texts(at.info)
+
+
+def test_acknowledge_and_resolve_are_saved():
+    at = analysed_app()
+    finding = at.session_state["verification"].report.flagged[0]
+    at.text_input(key=f"note_{finding.id}").set_value("seen by QA")
+    at.button(key=f"ack_{finding.id}").click().run()
+    assert at.session_state["reviews"][finding.id].status == "acknowledged"
+    at.button(key=f"res_{finding.id}").click().run()
+    assert at.session_state["reviews"][finding.id].status == "resolved"
+    assert at.session_state["reviews"][finding.id].note == "seen by QA"
+    from labelguard.db import database
+
+    stored = database.get_reviews(
+        at.session_state["analysis"].approved.document.sha256, at.session_state["analysis"].revised.document.sha256
+    )
+    assert stored[finding.id].status == "resolved"
+    at.button(key=f"open_{finding.id}").click().run()
+    assert at.session_state["reviews"][finding.id].status == "open"
+
+
+def test_decisions_survive_a_new_session_for_the_same_files():
+    at = analysed_app()
+    finding = at.session_state["verification"].report.flagged[0]
+    at.button(key=f"res_{finding.id}").click().run()
+    again = analysed_app()
+    assert again.session_state["reviews"][finding.id].status == "resolved"
+
+
+def test_unchanged_pair_shows_the_no_findings_state():
+    at = open_page(new_app(), "Upload & Analyze")
+    at.selectbox(key="sample_revised").set_value("Approved label (v1)").run()
+    at.button(key="load_samples").click().run()
+    at.button(key="start_analysis").click().run()
+    assert not at.exception
+    assert "No findings" in texts(at.success)
+    assert "not a statement that the label is compliant" in texts(at.caption)
+
+
+def test_visual_and_rules_pages_render_after_analysis():
+    at = analysed_app()
+    open_page(at, "Visual Comparison")
+    assert not at.exception
+    assert len(at.selectbox(key="visual_page").options) >= 1
+    open_page(at, "Rules")
+    assert not at.exception
+    assert len(at.dataframe) >= 1
+
+
+def test_broken_rules_file_is_shown_not_crashed(monkeypatch, tmp_path):
+    from labelguard import config
+
+    bad = tmp_path / "rules.toml"
+    bad.write_text("[[rule]]\nid = 'X'\nseverity = 'nope'\n", encoding="utf-8")
+    monkeypatch.setattr(config, "RULES_PATH", bad)
+    at = open_page(new_app(), "Rules")
+    assert not at.exception
+    assert "problem(s)" in texts(at.error)
+    at = open_page(at, "Upload & Analyze")
+    at.button(key="load_samples").click().run()
+    at.button(key="start_analysis").click().run()
+    assert not at.exception
+    assert "problem(s)" in texts(at.error) and "analysis" not in at.session_state
+
+
+def test_scanned_revised_label_without_ocr_shows_not_verified_not_false_findings():
+    # Works the same on machines with and without Tesseract: OCR is switched off for this run.
+    at = open_page(new_app(), "Upload & Analyze")
+    at.selectbox(key="sample_revised").set_value("Scanned copy of approved label (image only)").run()
+    at.button(key="load_samples").click().run()
+    if not at.checkbox(key="use_ocr").disabled:  # it is disabled (and already off) when Tesseract is missing
+        at.checkbox(key="use_ocr").set_value(False).run()
+    assert at.checkbox(key="use_ocr").value is False
+    at.button(key="start_analysis").click().run()
+    assert not at.exception
+    assert at.radio(key="nav").value == "Findings"
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Discrepancies flagged"] == "0" and int(metrics["Not verified (check manually)"]) >= 1
+    assert at.session_state["verification"].report.flagged == ()
+    assert any("text not readable" in e.label for e in at.expander)
+    for page in ("Dashboard", "Findings", "Visual Comparison", "Results", "Rules"):
+        open_page(at, page)
+        assert not at.exception, page

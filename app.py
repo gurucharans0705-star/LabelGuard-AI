@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import streamlit as st
 
-from labelguard import __version__
+from labelguard.version import __version__
 from labelguard.ui import state
 from labelguard.ui.dashboard import render_dashboard
+from labelguard.ui.findings import render_findings_page
 from labelguard.ui.results import render_results_page
+from labelguard.ui.rules_page import render_rules_page
 from labelguard.ui.style import apply_style, badge
 from labelguard.ui.upload import render_upload_page
+from labelguard.ui.visual import render_visual_page
 
 st.set_page_config(page_title="LabelGuard AI", page_icon="🛡️", layout="wide")
 
@@ -46,6 +49,12 @@ def render_sidebar() -> str:
             "Analysis &nbsp; " + (badge("complete", "ok") if state.get_analysis() else badge("not run", "info")),
             unsafe_allow_html=True,
         )
+        if state.get_verification() is not None:
+            open_count = state.open_finding_count()
+            st.markdown(
+                "Open findings &nbsp; " + (badge(str(open_count), "bad") if open_count else badge("0", "ok")),
+                unsafe_allow_html=True,
+            )
         st.divider()
         st.caption(DISCLAIMER)
     return page
@@ -56,8 +65,14 @@ def main() -> None:
     page = render_sidebar()
     if page == "Upload & Analyze":
         render_upload_page()
+    elif page == "Findings":
+        render_findings_page()
+    elif page == "Visual Comparison":
+        render_visual_page()
     elif page == "Results":
         render_results_page()
+    elif page == "Rules":
+        render_rules_page()
     else:
         render_dashboard()
 

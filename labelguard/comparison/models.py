@@ -46,6 +46,9 @@ class FieldComparison:
         return "changed"
 
 
+BBox = tuple[float, float, float, float]  # x0, y0, x1, y1 in PDF points
+
+
 @dataclass(frozen=True)
 class TextChange:
     kind: str  # "added" | "removed" | "modified"
@@ -54,6 +57,56 @@ class TextChange:
     approved_page: int | None = None
     revised_page: int | None = None
     similarity: float | None = None
+    approved_bbox: BBox | None = None
+    revised_bbox: BBox | None = None
+
+
+@dataclass(frozen=True)
+class MovedLine:
+    """A line with identical wording that is in a different place (moved, reordered or shifted)."""
+
+    text: str
+    approved_page: int
+    revised_page: int
+    approved_bbox: BBox
+    revised_bbox: BBox
+
+
+@dataclass(frozen=True)
+class TextDiff:
+    """Detailed line comparison, including positions, so other checks can explain what moved."""
+
+    changes: tuple[TextChange, ...]
+    unchanged: int  # lines equal in wording and order
+    moved: tuple[MovedLine, ...] = ()  # same wording, different order: not a content change
+    shifted: tuple[MovedLine, ...] = ()  # same wording and order, printed at a different position
+    # True when words were compared instead of lines (used when a label was read by OCR, because
+    # OCR splits and joins lines differently from the original PDF). Moves are not detected then.
+    word_level: bool = False
+
+    def affected_boxes(self) -> dict[tuple[str, int], list[BBox]]:
+        """Areas of the pages touched by text edits, keyed by ("approved" | "revised", page).
+
+        Shifted lines are only counted when other text changed too: then the shift is most
+        likely re-flow caused by the edit. On its own, a shift is a layout change and stays visible.
+        """
+        boxes: dict[tuple[str, int], list[BBox]] = {}
+
+        def add(side: str, page: int | None, box: BBox | None) -> None:
+            if page is not None and box is not None:
+                boxes.setdefault((side, page), []).append(box)
+
+        for change in self.changes:
+            add("approved", change.approved_page, change.approved_bbox)
+            add("revised", change.revised_page, change.revised_bbox)
+        for line in self.moved:
+            add("approved", line.approved_page, line.approved_bbox)
+            add("revised", line.revised_page, line.revised_bbox)
+        if self.changes or self.moved:
+            for line in self.shifted:
+                add("approved", line.approved_page, line.approved_bbox)
+                add("revised", line.revised_page, line.revised_bbox)
+        return boxes
 
 
 @dataclass(frozen=True)
@@ -61,6 +114,12 @@ class ComparisonResult:
     fields: tuple[FieldComparison, ...]
     text_changes: tuple[TextChange, ...]
     unchanged_lines: int
+    text_diff: TextDiff | None = None
+
+    @property
+    def moved_lines(self) -> int:
+        """Number of lines whose wording is unchanged but whose order or place differs."""
+        return len(self.text_diff.moved) if self.text_diff else 0
 
     @property
     def matching_fields(self) -> int:

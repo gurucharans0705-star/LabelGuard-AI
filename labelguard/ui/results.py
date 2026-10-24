@@ -102,6 +102,8 @@ def _render_differences(analysis: AnalysisResult) -> None:
             "At least one label was read by OCR. OCR can join or split lines differently from the original PDF, "
             "so line-level text differences may reflect layout rather than wording. Rely on the field comparison first."
         )
+    if analysis.comparison.text_diff and analysis.comparison.text_diff.word_level:
+        st.caption("Because OCR was involved, text was compared word by word rather than line by line.")
     if comparison.text_identical:
         st.success(f"The text of both labels is identical ({comparison.unchanged_lines} lines compared).")
         return

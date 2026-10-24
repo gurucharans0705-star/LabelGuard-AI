@@ -9,6 +9,7 @@ import streamlit as st
 from labelguard.comparison.models import KIND_LABELS
 from labelguard.db import database
 from labelguard.pipeline import AnalysisResult
+from labelguard.rules.models import SEVERITIES, SEVERITY_LABELS
 from labelguard.ui import state
 from labelguard.ui.style import page_header
 
@@ -39,6 +40,7 @@ def render_dashboard() -> None:
         _quick_start()
     else:
         _summary(analysis)
+        _verification_summary()
     _recent_runs()
     _limitations()
 
@@ -49,7 +51,7 @@ def _quick_start() -> None:
         "1. Open **Upload & Analyze** and load the approved label and the revised label (PDF).\n"
         "2. Check that both files pass validation.\n"
         "3. Press **Start label analysis**.\n"
-        "4. Review the differences, extracted fields and evidence under **Results**."
+        "4. Review the ranked findings and evidence under **Findings**, and the artwork under **Visual Comparison**."
     )
     st.button("Go to Upload & Analyze", type="primary", on_click=state.goto, args=("Upload & Analyze",), key="go_upload")
 
@@ -85,6 +87,22 @@ def _summary(analysis: AnalysisResult) -> None:
     st.button("Open full results", type="primary", on_click=state.goto, args=("Results",), key="open_results_dash")
 
 
+def _verification_summary() -> None:
+    result = state.get_verification()
+    if result is None:
+        return
+    report = result.report
+    counts = report.severity_counts()
+    st.subheader("Verification findings")
+    cols = st.columns(len(SEVERITIES) + 1)
+    cols[0].metric("Open", state.open_finding_count())
+    for column, severity in zip(cols[1:], SEVERITIES):
+        column.metric(SEVERITY_LABELS[severity], counts[severity])
+    if report.not_evaluated:
+        st.warning(f"{len(report.not_evaluated)} item(s) could not be verified and need a manual check.")
+    st.button("Open findings", type="primary", on_click=state.goto, args=("Findings",), key="open_findings_dash")
+
+
 def _recent_runs() -> None:
     """Show the last few analyses from the run log (file names, fingerprints and counts only)."""
     try:
@@ -104,6 +122,8 @@ def _recent_runs() -> None:
                 "Revised label": run.revised_filename,
                 "Fields changed": run.fields_changed,
                 "Text lines changed": run.text_modified + run.text_added + run.text_removed,
+                "Findings flagged": run.findings_flagged,
+                "Critical review": run.findings_critical,
                 "OCR pages": run.ocr_pages,
             }
             for run in runs

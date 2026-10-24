@@ -6,11 +6,12 @@ import logging
 import streamlit as st
 
 from labelguard.extraction.pdf_text import ExtractionError
-from labelguard.pipeline import analyze_pair
+from labelguard.rules.loader import RuleConfigError
 from labelguard.samples.synthetic_labels import APPROVED_NAME, REVISED_NAME, ensure_sample_files
 from labelguard.ui import state
 from labelguard.ui.components import format_size
 from labelguard.ui.style import page_header
+from labelguard.verification import verify_pair
 
 logger = logging.getLogger(__name__)
 
@@ -92,29 +93,56 @@ def _render_controls() -> None:
     )
     if not ocr.available:
         st.caption(f"OCR is unavailable: {ocr.message} Digital (text-based) PDFs still work.")
+
+    tools = state.tool_status()
+    run_visual = st.checkbox(
+        "Compare artwork (visual comparison of the pages)",
+        value=tools["vision"][0],
+        disabled=not tools["vision"][0],
+        key="run_visual",
+    )
+    if not tools["vision"][0]:
+        st.caption(f"Visual comparison is unavailable: {tools['vision'][1]}")
+    run_barcodes = st.checkbox(
+        "Decode barcodes",
+        value=tools["barcode"][0],
+        disabled=not tools["barcode"][0],
+        key="run_barcodes",
+    )
+    if not tools["barcode"][0]:
+        st.caption(f"Barcode decoding is unavailable: {tools['barcode'][1]} Barcodes will be reported as not verified.")
     if not ready:
         st.caption("Load two valid PDF files to enable the analysis.")
 
     if st.button("Start label analysis", type="primary", disabled=not ready, key="start_analysis"):
-        _run_analysis(approved, revised, use_ocr)
+        _run_analysis(approved, revised, use_ocr, run_visual, run_barcodes)
 
-    if state.get_analysis() is not None:
+    if state.get_verification() is not None:
         st.success("An analysis is available for the loaded labels.")
-        st.button("Open results", on_click=state.goto, args=("Results",), key="open_results_upload")
+        st.button("Open findings", on_click=state.goto, args=("Findings",), key="open_findings_upload")
 
 
-def _run_analysis(approved: state.LoadedFile, revised: state.LoadedFile, use_ocr: bool) -> None:
+def _run_analysis(
+    approved: state.LoadedFile, revised: state.LoadedFile, use_ocr: bool, run_visual: bool, run_barcodes: bool
+) -> None:
     with st.status("Analyzing labels...", expanded=True) as box:
         try:
-            result = analyze_pair(
+            result = verify_pair(
                 (approved.data, approved.name),
                 (revised.data, revised.name),
                 use_ocr=use_ocr,
+                run_visual=run_visual,
+                run_barcodes=run_barcodes,
                 progress=box.write,
             )
         except ExtractionError as exc:
             box.update(label="Analysis stopped", state="error")
             st.error(str(exc))
+            return
+        except RuleConfigError as exc:
+            box.update(label="Analysis stopped: the rules file has a problem", state="error")
+            st.error(str(exc))
+            st.caption("Fix the rules file (see the Rules page) and start the analysis again.")
             return
         except Exception as exc:  # last-resort guard so the user sees a message, not a stack trace
             logger.exception("Unexpected error during analysis")
@@ -122,6 +150,6 @@ def _run_analysis(approved: state.LoadedFile, revised: state.LoadedFile, use_ocr
             st.error(f"An unexpected error occurred ({exc.__class__.__name__}). Please try different files.")
             return
         box.update(label="Analysis complete", state="complete", expanded=False)
-    state.store_analysis(result)
-    state.goto("Results")
+    state.store_verification(result)
+    state.goto("Findings")
     st.rerun()

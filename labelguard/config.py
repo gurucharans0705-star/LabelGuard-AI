@@ -29,6 +29,8 @@ def _env_bool(name: str, default: bool) -> bool:
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 SAMPLES_DIR = DATA_DIR / "samples"
+# Validation rules file (readable TOML). Override with LABELGUARD_RULES_PATH.
+RULES_PATH = Path(os.environ.get("LABELGUARD_RULES_PATH", "").strip() or BASE_DIR / "config" / "rules.toml")
 # SQLite database file (analysis-run log). Override with LABELGUARD_DB_PATH.
 DB_PATH = Path(os.environ.get("LABELGUARD_DB_PATH", "").strip() or DATA_DIR / "labelguard.db")
 

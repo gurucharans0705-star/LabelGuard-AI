@@ -1,11 +1,22 @@
+# Python environments
 .venv/
+.venv311/
+venv/
+
+# Python caches and tests
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+
+# Secrets
 .env
+.env.*
+
+# Generated outputs
 data/uploads/
 data/reports/
 data/*.db
-.venv311/
-*.sqlite
-*.sqlite3
+
+# Editor and OS files
+.vscode/
+.DS_Store

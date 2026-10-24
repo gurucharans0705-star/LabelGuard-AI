@@ -70,5 +70,7 @@ def analyze_pair(
         approved_result.fields,
         revised_result.document.all_lines,
         revised_result.fields,
+        # OCR splits and joins lines differently from the PDF, so compare words when a scan is involved.
+        word_level=bool(approved_result.document.ocr_pages or revised_result.document.ocr_pages),
     )
     return AnalysisResult(approved_result, revised_result, comparison)

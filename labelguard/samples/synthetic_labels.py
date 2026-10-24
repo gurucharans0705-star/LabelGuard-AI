@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pymupdf
+from reportlab.graphics.barcode import code128
 from reportlab.lib.colors import HexColor, black, white
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
@@ -57,10 +58,31 @@ class LabelSpec:
     address: str = "12 Example Road, Sampletown, Exampleland"
     band_color: str = "#1F4E79"
     logo_x_mm: float = 128.0
+    # Extra single lines printed under the storage text (e.g. harmless additions).
+    extra_lines: tuple[str, ...] = ()
+    # Additional pages after the label page; each page is a tuple of text lines
+    # (the first line is used as the page heading).
+    extra_pages: tuple[tuple[str, ...], ...] = ()
+    # Test hooks for deliberately inconsistent labels (None = derive both from udi_di_body):
+    # the UDI text printed on the label, and the digits encoded in the barcode.
+    udi_text: str | None = None
+    barcode_value: str | None = None
 
     @property
     def udi_di(self) -> str:
         return build_udi_di(self.udi_di_body)
+
+    @property
+    def printed_udi(self) -> str:
+        """The UDI text printed on the label."""
+        return self.udi_text if self.udi_text is not None else self.udi_di
+
+    @property
+    def barcode_digits(self) -> str:
+        """Digits encoded in the label's Code 128 barcode: application identifier 01 + GTIN-14."""
+        if self.barcode_value is not None:
+            return self.barcode_value
+        return "01" + self.udi_di_body + str(gtin14_check_digit(self.udi_di_body))
 
 
 APPROVED = LabelSpec(
@@ -116,13 +138,14 @@ EXPECTED_V1_V2_DIFFERENCES = (
 
 
 def _draw_barcode(c: canvas.Canvas, digits: str, x: float, y: float, height: float) -> None:
-    """Draw a fake (non-scannable) barcode so artwork comparison has something to see."""
+    """Draw a real Code 128 barcode (decodable by barcode readers) encoding `digits`.
+
+    It is a plain Code 128 symbol, not a GS1-128 symbol with FNC1, so it is only suitable
+    for testing barcode decoding and artwork comparison.
+    """
     c.setFillColor(black)
-    cursor = x
-    for char in digits:
-        bar = (int(char) % 3 + 1) * 0.5 * mm
-        c.rect(cursor, y, bar, height, fill=1, stroke=0)
-        cursor += bar + 0.7 * mm
+    barcode = code128.Code128(digits, barHeight=height, barWidth=0.4 * mm)
+    barcode.drawOn(c, x, y)
 
 
 def render_label_pdf(spec: LabelSpec, path: Path) -> Path:
@@ -157,17 +180,18 @@ def render_label_pdf(spec: LabelSpec, path: Path) -> Path:
     if spec.sterility:
         c.drawString(85 * mm, y, spec.sterility)
     y -= 5.5 * mm
-    if spec.lot:
+    # None = the line is left out; "" = the keyword is printed with no value ("present but empty").
+    if spec.lot is not None:
         c.drawString(10 * mm, y, f"LOT: {spec.lot}")
-    if spec.expiry:
+    if spec.expiry is not None:
         c.drawString(85 * mm, y, f"EXP: {spec.expiry}")
     y -= 5.5 * mm
-    if spec.mfg_date:
+    if spec.mfg_date is not None:
         c.drawString(10 * mm, y, f"MFG: {spec.mfg_date}")
     y -= 6.5 * mm
-    c.drawString(10 * mm, y, f"UDI-DI: {spec.udi_di}")
+    c.drawString(10 * mm, y, f"UDI-DI: {spec.printed_udi}")
     y -= 10 * mm
-    _draw_barcode(c, spec.udi_di_body + str(gtin14_check_digit(spec.udi_di_body)), 10 * mm, y, 8 * mm)
+    _draw_barcode(c, spec.barcode_digits, 10 * mm, y, 8 * mm)
 
     # Warnings
     y -= 8 * mm
@@ -184,13 +208,40 @@ def render_label_pdf(spec: LabelSpec, path: Path) -> Path:
     y -= 7 * mm
     if spec.storage:
         c.drawString(10 * mm, y, spec.storage)
+    for line in spec.extra_lines:
+        y -= 5 * mm
+        c.drawString(10 * mm, y, line)
     if spec.manufacturer:
         c.setFont("Helvetica", 8)
         c.drawString(10 * mm, 9 * mm, f"Manufacturer: {spec.manufacturer}, {spec.address}")
-
     c.showPage()
+
+    for number, page_lines in enumerate(spec.extra_pages, start=2):
+        _draw_text_page(c, page_lines, width, height, number)
+        c.showPage()
+
     c.save()
     return path
+
+
+def _draw_text_page(c: canvas.Canvas, lines: tuple[str, ...], width: float, height: float, number: int) -> None:
+    """An additional plain text page (for example instructions for use)."""
+    c.setStrokeColor(black)
+    c.setLineWidth(1)
+    c.rect(5 * mm, 5 * mm, width - 10 * mm, height - 10 * mm)
+    c.setFillColor(black)
+    heading, *body = lines if lines else ("",)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(10 * mm, height - 15 * mm, heading)
+    c.setFont("Helvetica", 9)
+    y = height - 24 * mm
+    for line in body:
+        for part in textwrap.wrap(line, width=85) or [""]:
+            c.drawString(10 * mm, y, part)
+            y -= 4.8 * mm
+        y -= 1.5 * mm
+    c.setFont("Helvetica", 8)
+    c.drawString(10 * mm, 9 * mm, f"Page {number}")
 
 
 def make_scanned_copy(pdf_bytes: bytes, dpi: int = 200) -> bytes:
@@ -203,21 +254,34 @@ def make_scanned_copy(pdf_bytes: bytes, dpi: int = 200) -> bytes:
         return scanned.tobytes()
 
 
+# Bump when the sample artwork changes, so stale sample files on disk are regenerated.
+SAMPLE_VERSION = "2"
+
+
 def ensure_sample_files(directory: Path | None = None) -> dict[str, Path]:
-    """Create the sample PDFs if missing and return {display name: path}."""
+    """Create the sample PDFs if missing (or outdated) and return {display name: path}."""
     folder = directory or config.SAMPLES_DIR
+    folder.mkdir(parents=True, exist_ok=True)
     files = {
         APPROVED_NAME: folder / "approved_label_v1.pdf",
         REVISED_NAME: folder / "revised_label_v2.pdf",
         INCOMPLETE_NAME: folder / "incomplete_label.pdf",
         SCANNED_NAME: folder / "approved_label_scanned.pdf",
     }
+    marker = folder / ".sample_version"
+    try:
+        outdated = marker.read_text().strip() != SAMPLE_VERSION
+    except OSError:
+        outdated = True
+
     specs = {APPROVED_NAME: APPROVED, REVISED_NAME: REVISED, INCOMPLETE_NAME: INCOMPLETE}
     for name, spec in specs.items():
-        if not files[name].exists():
+        if outdated or not files[name].exists():
             render_label_pdf(spec, files[name])
-    if not files[SCANNED_NAME].exists():
+    if outdated or not files[SCANNED_NAME].exists():
         files[SCANNED_NAME].write_bytes(make_scanned_copy(files[APPROVED_NAME].read_bytes()))
+    if outdated:
+        marker.write_text(SAMPLE_VERSION)
     return files
 
 
