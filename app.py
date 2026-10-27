@@ -8,8 +8,13 @@ import streamlit as st
 
 from labelguard.version import __version__
 from labelguard.ui import state
+from labelguard.ui.ai_page import render_ai_page
+from labelguard.ui.audit_page import render_audit_page
 from labelguard.ui.dashboard import render_dashboard
 from labelguard.ui.findings import render_findings_page
+from labelguard.ui.history_page import render_history_page
+from labelguard.ui.impact_page import render_impact_page
+from labelguard.ui.queue_page import render_queue_page
 from labelguard.ui.results import render_results_page
 from labelguard.ui.rules_page import render_rules_page
 from labelguard.ui.style import apply_style, badge
@@ -71,6 +76,16 @@ def main() -> None:
         render_visual_page()
     elif page == "Results":
         render_results_page()
+    elif page == "AI Explanations":
+        render_ai_page()
+    elif page == "Review Queue":
+        render_queue_page()
+    elif page == "Change Impact":
+        render_impact_page()
+    elif page == "Product History":
+        render_history_page()
+    elif page == "Audit History":
+        render_audit_page()
     elif page == "Rules":
         render_rules_page()
     else:

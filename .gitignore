@@ -1,22 +1,9 @@
-# Python environments
 .venv/
-.venv311/
-venv/
-
-# Python caches and tests
 __pycache__/
-*.py[cod]
+*.pyc
 .pytest_cache/
-
-# Secrets
 .env
-.env.*
-
-# Generated outputs
 data/uploads/
 data/reports/
 data/*.db
-
-# Editor and OS files
-.vscode/
-.DS_Store
+.venv311/

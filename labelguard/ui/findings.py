@@ -15,15 +15,15 @@ from labelguard.rules.models import (
     SEVERITIES,
     SEVERITY_LABELS,
     SEVERITY_NOTE,
-    Evidence,
     Finding,
 )
 from labelguard.ui import state
+from labelguard.ui.finding_view import render_finding_body
+from labelguard.ui.review_widget import render_review_controls, render_reviewer_field
 from labelguard.ui.style import page_header
 from labelguard.verification import VerificationResult
 
 MAX_DETAILS = 40  # expanders shown at once; the table always lists every match
-_SOURCE_LABELS = {"approved": "Approved label", "revised": "Revised label", "both": "Both labels"}
 _RESULT_LABELS = {RESULT_FLAGGED: "Discrepancy", "not_evaluated": "Not verified"}
 
 
@@ -37,18 +37,22 @@ def render_findings_page() -> None:
 
     if st.session_state.get("run_log_error"):
         st.warning(st.session_state["run_log_error"])
-    if st.session_state.get("review_error"):
-        st.error(st.session_state["review_error"])
+    error = st.session_state.get("review_error")
+    if error and error.get("finding_id") is None:
+        st.error(error["message"])
 
     _render_summary(result)
     st.caption(SEVERITY_NOTE)
+    report_text = verification_to_markdown(result, state.get_reviews())
     st.download_button(
         "Download verification report (Markdown)",
-        verification_to_markdown(result, state.get_reviews()),
+        report_text,
         file_name="labelguard_verification_report.md",
         mime="text/markdown",
         key="download_verification_report",
+        on_click=state.log_report, args=("Verification report", "labelguard_verification_report.md", report_text),
     )
+    render_reviewer_field()
 
     findings = result.report.findings
     if not findings:
@@ -131,7 +135,7 @@ def _render_filters(findings: tuple[Finding, ...]) -> list[Finding]:
         if not needle:
             return True
         haystack = " ".join(
-            [finding.title, finding.description, finding.approved_value or "", finding.revised_value or "", finding.rule_id]
+            [finding.id, finding.title, finding.description, finding.approved_value or "", finding.revised_value or "", finding.rule_id]
             + [item.text for item in finding.evidence]
         ).casefold()
         return needle in haystack
@@ -177,79 +181,14 @@ def _load_history(result: VerificationResult) -> dict[str, list[database.ReviewE
     return grouped
 
 
-def _render_evidence(item: Evidence) -> None:
-    source = _SOURCE_LABELS.get(item.source, item.source)
-    where = f"page {item.page}" if item.page is not None else "page not recorded"
-    if item.kind == "text":
-        st.markdown(f"**{source} · {where}**")
-        st.code(item.text or "(no text recorded)", language=None)
-    elif item.kind == "absence":
-        st.caption(f"{source}: {item.text}")
-    else:
-        kind = "image region" if item.kind == "region" else "measurement"
-        st.caption(f"{source} · {where} · {kind}: {item.text}")
-
-
-def _on_review(finding: Finding, status: str) -> None:
-    state.review_finding(finding, status, st.session_state.get(f"note_{finding.id}", ""))
-
-
 def _render_finding(finding: Finding, history: list[database.ReviewEvent]) -> None:
-    status = state.review_status(finding.id)
     # The title must not change with the review status: a changed title makes Streamlit rebuild the
-    # expander, which would collapse it as soon as the reviewer presses Acknowledge or Resolve.
+    # expander, which would collapse it as soon as the reviewer changes the status.
     with st.expander(f"{finding.severity_label}  ·  {finding.rule_id}  ·  {finding.title}"):
-        st.caption(f"Review status: **{REVIEW_STATUS_LABELS[status]}**")
-        st.caption(
-            f"{finding.category_label} · {'Discrepancy flagged' if finding.result == RESULT_FLAGGED else 'Could not be verified (not a pass)'}"
-            f" · Finding ID {finding.id}"
-        )
-        st.write(finding.description)
-
-        left, right = st.columns(2, gap="large")
-        with left:
-            st.markdown("**Original (approved label)**")
-            st.code(finding.approved_value if finding.approved_value is not None else "—", language=None)
-        with right:
-            st.markdown("**Revised label**")
-            st.code(finding.revised_value if finding.revised_value is not None else "—", language=None)
-
-        st.markdown("**Evidence**")
-        if finding.evidence:
-            for item in finding.evidence:
-                _render_evidence(item)
-        if not finding.evidence_complete:
-            st.warning(
-                "The evidence for this finding is incomplete (no evidence was recorded, or an item has no page or "
-                "content). Check the source label before relying on this finding."
-            )
-        if finding.recommended_action:
-            st.info(f"**Recommended reviewer action:** {finding.recommended_action}")
-
-        st.markdown("**Review**")
-        record = state.get_reviews().get(finding.id)
-        st.text_input(
-            "Reviewer note (optional)", value=record.note if record else "", key=f"note_{finding.id}",
-        )
-        a, b, c = st.columns(3)
-        a.button("Acknowledge", key=f"ack_{finding.id}", disabled=status == "acknowledged",
-                 on_click=_on_review, args=(finding, "acknowledged"))
-        b.button("Resolve", key=f"res_{finding.id}", type="primary", disabled=status == "resolved",
-                 on_click=_on_review, args=(finding, "resolved"))
-        c.button("Reopen", key=f"open_{finding.id}", disabled=status == "open",
-                 on_click=_on_review, args=(finding, "open"))
-        st.caption(
-            "Acknowledging or resolving records a decision for this pair of files. It does not change the finding "
-            "and is not an approval of the label."
-        )
-        if history:
-            st.caption(
-                "History: " + "; ".join(
-                    f"{event.at.replace('T', ' ').replace('+00:00', ' UTC')}: {REVIEW_STATUS_LABELS[event.from_status]} → "
-                    f"{REVIEW_STATUS_LABELS[event.to_status]}" + (f" ({event.note})" if event.note else "")
-                    for event in history
-                )
-            )
+        render_finding_body(finding)
+        target = state.target_for(finding)
+        if target is not None:
+            render_review_controls(target, state.get_reviews().get(finding.id), history)
 
 
 # --- Rule evaluation --------------------------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 """SQLite run log and the Markdown comparison report."""
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -44,11 +45,20 @@ def test_empty_database_lists_no_runs():
     assert database.list_runs() == []
 
 
-def test_label_text_is_never_stored(sample_analysis):
+def test_only_extracted_fields_are_stored_not_the_full_label_text(sample_analysis):
+    # Day 1/2 stored no label content at all. From Day 3 the extracted field values and the findings'
+    # evidence quotes are stored (the audit trail needs them) but never the document body or the PDF.
     database.save_run(sample_analysis)
     raw = config.DB_PATH.read_bytes()
-    for private in (b"Northwind", b"rubber latex", b"NW-IV200", b"A24-0917"):
-        assert private not in raw
+    document = sample_analysis.approved.document
+    assert document.full_text.encode() not in raw
+    assert b"%PDF" not in raw
+    stored = json.dumps(database.load_job_fields(1)).encode()
+    unextracted = [line.text for line in document.all_lines if line.text.encode() not in stored and len(line.text) > 20]
+    assert unextracted, "the sample should have label lines that are not extracted fields"
+    for line in unextracted:
+        assert line.encode() not in raw, line
+    assert b"Northwind" in raw  # the extracted manufacturer field is stored on purpose
 
 
 def test_unusable_database_raises_sqlite_error_not_something_obscure(sample_analysis, tmp_path):

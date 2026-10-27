@@ -13,18 +13,19 @@ H1, H2 = "a" * 64, "b" * 64
 
 def test_review_set_get_history_and_upsert():
     assert database.get_reviews(H1, H2) == {}
-    database.set_review(H1, H2, "F-1", "R-ID-001", "critical_review", "acknowledged", "looking")
-    record = database.set_review(H1, H2, "F-1", "R-ID-001", "critical_review", "resolved", "intended change")
+    database.set_review(H1, H2, "F-1", "R-ID-001", "critical_review", "under_review", "looking", "QA")
+    record = database.set_review(H1, H2, "F-1", "R-ID-001", "critical_review", "resolved", "intended change", "QA")
+    assert record.reviewer == "QA"
     reviews = database.get_reviews(H1, H2)
-    assert reviews["F-1"].status == "resolved" and reviews["F-1"].note == "intended change"
+    assert reviews["F-1"].status == "resolved" and reviews["F-1"].rationale == "intended change"
     history = database.review_history(H1, H2, "F-1")
-    assert [(e.from_status, e.to_status) for e in history] == [("open", "acknowledged"), ("acknowledged", "resolved")]
+    assert [(e.from_status, e.to_status) for e in history] == [("pending", "under_review"), ("under_review", "resolved")]
     assert database.get_reviews(H2, H1) == {}  # decisions belong to this exact pair of files
 
 
 def test_bad_review_status_is_rejected():
     with pytest.raises(ValueError):
-        database.set_review(H1, H2, "F-1", "R", "low", "approved")
+        database.set_review(H1, H2, "F-1", "R", "low", "approved", "", "QA")
 
 
 def test_old_day1_database_is_upgraded_in_place(tmp_path):
@@ -36,16 +37,17 @@ def test_old_day1_database_is_upgraded_in_place(tmp_path):
             " text_modified INTEGER, text_added INTEGER, text_removed INTEGER, ocr_pages INTEGER)"
         )
     assert database.list_runs(5, db_path=path) == []
-    database.set_review(H1, H2, "F-1", "R", "low", "resolved", db_path=path)
+    database.set_review(H1, H2, "F-1", "R", "low", "resolved", "checked", "QA", db_path=path)
     assert "F-1" in database.get_reviews(H1, H2, db_path=path)
 
 
-def test_review_notes_are_the_only_free_text_stored(approved_pdf, revised_pdf):
+def test_full_label_text_is_not_stored(approved_pdf, revised_pdf):
     result = verify_pair((approved_pdf.read_bytes(), "a.pdf"), (revised_pdf.read_bytes(), "r.pdf"))
     database.save_run(result.analysis, report=result.report)
     with sqlite3.connect(config.DB_PATH) as connection:
         dump = "\n".join(connection.iterdump())
-    assert "Gravity Infusion" not in dump and "NW-IV200" not in dump
+    assert result.analysis.approved.document.full_text not in dump
+    assert result.analysis.revised.document.full_text not in dump
 
 
 def test_verification_report_contents(approved_pdf, revised_pdf):
@@ -53,7 +55,7 @@ def test_verification_report_contents(approved_pdf, revised_pdf):
     first = result.report.findings[0]
     record = database.set_review(
         result.analysis.approved.document.sha256, result.analysis.revised.document.sha256,
-        first.id, first.rule_id, first.severity, "acknowledged", "checked with QA",
+        first.id, first.rule_id, first.severity, "under_review", "checked with QA", "QA",
     )
     text = verification_to_markdown(result, {first.id: record})
     assert "workflow priority" in text and "not a regulatory" in text.lower()

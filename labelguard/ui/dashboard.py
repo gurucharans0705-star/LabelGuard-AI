@@ -41,6 +41,7 @@ def render_dashboard() -> None:
     else:
         _summary(analysis)
         _verification_summary()
+    _queue_overview()
     _recent_runs()
     _limitations()
 
@@ -103,6 +104,20 @@ def _verification_summary() -> None:
     st.button("Open findings", type="primary", on_click=state.goto, args=("Findings",), key="open_findings_dash")
 
 
+def _queue_overview() -> None:
+    """How many saved discrepancies are in each review status (across all saved analyses)."""
+    try:
+        counts = database.review_status_counts()
+    except (sqlite3.Error, OSError):
+        return
+    if not any(counts.values()):
+        return
+    st.subheader("Review queue")
+    for column, status in zip(st.columns(len(counts)), counts):
+        column.metric(database.REVIEW_STATUS_LABELS[status], counts[status])
+    st.button("Open review queue", on_click=state.goto, args=("Review Queue",), key="open_queue_dash")
+
+
 def _recent_runs() -> None:
     """Show the last few analyses from the run log (file names, fingerprints and counts only)."""
     try:
@@ -144,6 +159,10 @@ def _limitations() -> None:
             "- Differences are neutral observations. A difference is not automatically an error, because "
             "many changes are intended and approved.\n"
             "- OCR on scanned pages can misread characters; low-confidence pages are flagged.\n"
-            "- Day 1 covers text and field comparison, a Markdown report and a simple run log. Artwork "
-            "comparison, per-finding review history and PDF reports are not built yet."
+            "- Findings come from configurable rules (see Rules). Visual comparison is a basic pixel comparison, and "
+            "scans are never compared by pixels.\n"
+            "- Change impact uses a **synthetic** local catalog; it is not connected to any PLM, ERP or regulatory system.\n"
+            "- AI explanations are optional, only restate findings, and never change a finding or approve a label.\n"
+            "- A review status records a person's decision; it is not an approval or release of a label. "
+            "PDF reports are not built yet."
         )

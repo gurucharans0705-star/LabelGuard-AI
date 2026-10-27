@@ -31,6 +31,10 @@ DATA_DIR = BASE_DIR / "data"
 SAMPLES_DIR = DATA_DIR / "samples"
 # Validation rules file (readable TOML). Override with LABELGUARD_RULES_PATH.
 RULES_PATH = Path(os.environ.get("LABELGUARD_RULES_PATH", "").strip() or BASE_DIR / "config" / "rules.toml")
+# Change-impact rules (which labels a parameter change may affect). Override with LABELGUARD_IMPACT_RULES_PATH.
+IMPACT_RULES_PATH = Path(
+    os.environ.get("LABELGUARD_IMPACT_RULES_PATH", "").strip() or BASE_DIR / "config" / "impact_rules.toml"
+)
 # SQLite database file (analysis-run log). Override with LABELGUARD_DB_PATH.
 DB_PATH = Path(os.environ.get("LABELGUARD_DB_PATH", "").strip() or DATA_DIR / "labelguard.db")
 

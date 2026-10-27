@@ -31,7 +31,9 @@ def texts(elements) -> str:
 def test_dashboard_loads_with_navigation():
     at = new_app()
     assert not at.exception
-    assert at.radio(key="nav").options == ["Dashboard", "Upload & Analyze", "Findings", "Visual Comparison", "Results", "Rules"]
+    assert at.radio(key="nav").options == [
+        "Dashboard", "Upload & Analyze", "Findings", "Visual Comparison", "Results", "AI Explanations", "Review Queue",
+        "Change Impact", "Product History", "Audit History", "Rules"]
     assert {m.label for m in at.metric} >= {"Approved label", "Revised label", "Analysis", "OCR engine"}
 
 
@@ -163,31 +165,55 @@ def test_filters_narrow_the_findings():
     assert "No finding matches" in texts(at.info)
 
 
-def test_acknowledge_and_resolve_are_saved():
+def test_review_buttons_need_a_named_reviewer_and_a_rationale():
+    """Day 3 rules (these replace the one-click Day 2 flow): a named person decides, and gives a reason to resolve."""
     at = analysed_app()
     finding = at.session_state["verification"].report.flagged[0]
-    at.text_input(key=f"note_{finding.id}").set_value("seen by QA")
-    at.button(key=f"ack_{finding.id}").click().run()
-    assert at.session_state["reviews"][finding.id].status == "acknowledged"
+    assert at.button(key=f"res_{finding.id}").disabled and at.button(key=f"start_{finding.id}").disabled  # no name yet
+    at.text_input(key="reviewer_name").set_value("QA Tester").run()
+    assert not at.button(key=f"res_{finding.id}").disabled
+    at.button(key=f"res_{finding.id}").click().run()  # no rationale
+    assert not at.exception and "rationale" in texts(at.error)
+    assert finding.id not in at.session_state["reviews"]  # nothing was saved
+    at.text_input(key=f"note_{finding.id}").set_value("covered by change request CR-7").run()
     at.button(key=f"res_{finding.id}").click().run()
-    assert at.session_state["reviews"][finding.id].status == "resolved"
-    assert at.session_state["reviews"][finding.id].note == "seen by QA"
+    assert not at.exception and at.session_state["reviews"][finding.id].status == "resolved"
+
+
+def test_start_resolve_and_reopen_are_saved_with_reviewer_and_rationale():
     from labelguard.db import database
 
+    at = analysed_app()
+    finding = at.session_state["verification"].report.flagged[0]
+    at.text_input(key="reviewer_name").set_value("QA Tester").run()
+    at.button(key=f"start_{finding.id}").click().run()
+    assert at.session_state["reviews"][finding.id].status == "under_review"
+    at.text_input(key=f"note_{finding.id}").set_value("seen by QA").run()
+    at.button(key=f"res_{finding.id}").click().run()
+    record = at.session_state["reviews"][finding.id]
+    assert (record.status, record.rationale, record.reviewer) == ("resolved", "seen by QA", "QA Tester")
     stored = database.get_reviews(
-        at.session_state["analysis"].approved.document.sha256, at.session_state["analysis"].revised.document.sha256
-    )
-    assert stored[finding.id].status == "resolved"
-    at.button(key=f"open_{finding.id}").click().run()
-    assert at.session_state["reviews"][finding.id].status == "open"
+        at.session_state["analysis"].approved.document.sha256, at.session_state["analysis"].revised.document.sha256)
+    assert stored[finding.id].status == "resolved" and stored[finding.id].reviewer == "QA Tester"
+    at.button(key=f"reopen_{finding.id}").click().run()
+    assert at.session_state["reviews"][finding.id].status == "pending"
+    history = database.review_history(record_hash(at, "approved"), record_hash(at, "revised"), finding.id)
+    assert [e.to_status for e in history] == ["under_review", "resolved", "pending"]  # the resolved step is kept
+
+
+def record_hash(at, side):
+    return getattr(at.session_state["analysis"], side).document.sha256
 
 
 def test_decisions_survive_a_new_session_for_the_same_files():
     at = analysed_app()
     finding = at.session_state["verification"].report.flagged[0]
+    at.text_input(key="reviewer_name").set_value("QA Tester").run()
+    at.text_input(key=f"note_{finding.id}").set_value("ok per CR-7").run()
     at.button(key=f"res_{finding.id}").click().run()
     again = analysed_app()
     assert again.session_state["reviews"][finding.id].status == "resolved"
+    assert again.session_state["reviews"][finding.id].rationale == "ok per CR-7"
 
 
 def test_unchanged_pair_shows_the_no_findings_state():

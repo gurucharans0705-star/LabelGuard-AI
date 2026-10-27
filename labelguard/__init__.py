@@ -1,4 +1,3 @@
-
 """LabelGuard AI package."""
 
 from .version import __version__

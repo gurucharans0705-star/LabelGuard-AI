@@ -1,0 +1,141 @@
+# LabelGuard AI - change-impact rules
+#
+# When a product parameter changes, each rule below says which label records may need a review.
+# Edit this file in any text editor, save it, and run a new impact analysis. A mistake is reported
+# with the rule id and the problem.
+#
+# IMPORTANT: a rule marks labels that *may* be affected through relationships recorded in the
+# local catalog. It does not decide that a label is wrong, and it does not interpret any
+# regulation. "severity" is a workflow priority for the reviewer, not a regulatory classification.
+#
+# Settings
+#   id, name, description   as for the verification rules
+#   parameters              field keys this rule reacts to, or ["*"] for any parameter. Keys:
+#                           product_name, manufacturer, product_identifier, udi, lot_number,
+#                           expiration_date, manufacturing_date, safety_warnings,
+#                           storage_instructions, sterilization
+#   scope                   which labels are candidates:
+#                             "config"  labels of the changed product configuration
+#                             "product" labels of every configuration of the changed product
+#                             "related" labels of products that CONTAIN the changed product
+#                                       (explicit relationships, e.g. a kit that includes it)
+#   severity                critical_review | high | medium | low | informational
+#   reason                  why this relationship matters (shown with every impact)
+#   action                  the recommended reviewer action
+#   enabled                 true or false
+#   label_statuses          which label records count (default: draft, in_review, approved).
+#                           Retired labels are normally left out.
+#   packaging_levels        optional list (unit, box, shipper); empty or missing = every level
+#   markets                 optional list of market codes; empty or missing = every market
+#   require_field           default true: the label record must list the parameter among the fields
+#                           it shows. Set false to include labels whatever fields they list.
+#   relationship_kinds      for scope "related" (default ["contains_component"])
+#   translation_action      optional extra action added for labels written in another language
+#                           than the product's source language
+
+[[rule]]
+id = "IMP-ID-001"
+name = "Identifier change: labels of this configuration"
+description = "A product identifier or UDI text appears on every label of the configuration that shows it."
+parameters = ["product_identifier", "udi"]
+scope = "config"
+severity = "high"
+reason = "The label shows this identifier, so its printed value and any barcode would no longer match the product record."
+action = "Check the identifier on the label artwork and its barcode against the updated product record."
+
+[[rule]]
+id = "IMP-ID-002"
+name = "Identifier change: kit labels that list the component"
+description = "A kit label that lists its components shows the component's identifier."
+parameters = ["product_identifier", "udi"]
+scope = "related"
+severity = "medium"
+reason = "A product that contains the changed product lists it on its own label."
+action = "Check how the kit label refers to the changed component and update it if the old identifier is shown."
+
+[[rule]]
+id = "IMP-SAFE-001"
+name = "Safety statement change: every label of the product"
+description = "Safety warnings are normally shared by all configurations and markets of a product."
+parameters = ["safety_warnings"]
+scope = "product"
+severity = "critical_review"
+reason = "The label shows safety warnings for this product, and the wording of a warning may be shared across configurations."
+action = "Compare the label's warnings with the changed statement and route to the qualified reviewer before any release decision."
+translation_action = "Confirm that the translated warning matches the changed source wording."
+
+[[rule]]
+id = "IMP-SAFE-002"
+name = "Safety statement change: kit labels"
+description = "A kit label may repeat component warnings."
+parameters = ["safety_warnings"]
+scope = "related"
+severity = "high"
+reason = "A product that contains the changed product may repeat its warnings."
+action = "Check whether the kit label or its instructions repeat the changed warning."
+translation_action = "Confirm that the translated warning matches the changed source wording."
+
+[[rule]]
+id = "IMP-STER-001"
+name = "Sterilization change: unit and box labels"
+description = "Sterilization information is printed on the unit and on the box."
+parameters = ["sterilization"]
+scope = "config"
+severity = "high"
+reason = "The label shows the sterilization information of this configuration."
+action = "Check the sterilization statement and symbol on the label against the change."
+packaging_levels = ["unit", "box"]
+translation_action = "Confirm that the translated statement matches the changed source wording."
+
+[[rule]]
+id = "IMP-STOR-001"
+name = "Storage change: labels of this configuration"
+description = "Storage conditions are printed on the labels that show them."
+parameters = ["storage_instructions"]
+scope = "config"
+severity = "medium"
+reason = "The label shows storage conditions for this configuration."
+action = "Check the storage wording on the label against the change."
+translation_action = "Confirm that the translated storage wording matches the changed source wording."
+
+[[rule]]
+id = "IMP-MFR-001"
+name = "Manufacturer change: every label of the product"
+description = "Manufacturer details are shared by all labels of a product."
+parameters = ["manufacturer"]
+scope = "product"
+severity = "medium"
+reason = "The label shows the manufacturer's name and address for this product."
+action = "Check the manufacturer block on the label against the updated details."
+
+[[rule]]
+id = "IMP-NAME-001"
+name = "Product name change: every label of the product"
+description = "The product name appears on every label of the product."
+parameters = ["product_name"]
+scope = "product"
+severity = "medium"
+reason = "The label shows the product name."
+action = "Check the product name on the label against the change."
+translation_action = "Confirm that the translated product name is still consistent."
+
+[[rule]]
+id = "IMP-VAR-001"
+name = "Lot or date field change: labels of this configuration"
+description = "Lot and date fields are variable data, normally filled per lot."
+parameters = ["lot_number", "expiration_date", "manufacturing_date"]
+scope = "config"
+severity = "low"
+reason = "The label has a field for this variable data."
+action = "Check that the label template or print process still fills this field as intended."
+
+[[rule]]
+id = "IMP-ANY-001"
+name = "Any other parameter: informational"
+description = "A fallback that notes every label of the configuration that shows the changed field."
+parameters = ["*"]
+scope = "config"
+severity = "informational"
+reason = "The label shows the changed field."
+action = "Look at the label to decide whether the change affects it."
+enabled = false

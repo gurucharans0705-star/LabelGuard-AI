@@ -16,7 +16,9 @@ from labelguard.fields.models import FIELD_LABELS, NOT_DETECTED
 from labelguard.rules.models import SEVERITIES, SEVERITY_LABELS, SEVERITY_NOTE, Evidence, Finding
 
 if TYPE_CHECKING:
+    from labelguard.ai.models import Explanation
     from labelguard.db.database import ReviewRecord
+    from labelguard.impact.models import Catalog, ImpactResult
     from labelguard.pipeline import AnalysisResult, LabelAnalysis
     from labelguard.verification import VerificationResult
 
@@ -165,13 +167,13 @@ def _evidence_text(item: Evidence) -> str:
 
 
 def _finding_lines(finding: Finding, review: "ReviewRecord | None") -> list[str]:
-    status = REVIEW_STATUS_LABELS[review.status] if review else REVIEW_STATUS_LABELS["open"]
+    status = REVIEW_STATUS_LABELS[review.status] if review else REVIEW_STATUS_LABELS["pending"]
     lines = [
         f"### {finding.id} - {_cell(finding.title)}", "",
         f"- **Severity (workflow priority):** {finding.severity_label}",
         f"- **Category:** {finding.category_label}",
         f"- **Result:** {'Discrepancy flagged' if finding.result == 'flagged' else 'Could not be verified (not a pass)'}",
-        f"- **Review status:** {status}" + (f" - note: {_cell(review.note)}" if review and review.note else ""),
+        f"- **Review status:** {status}" + (f" - rationale: {_cell(review.rationale)}" if review and review.rationale else ""),
     ]
     if finding.approved_value is not None:
         lines.append(f"- **Approved label:** {_cell(finding.approved_value)}")
@@ -225,7 +227,7 @@ def verification_to_markdown(
             ["ID", "Severity", "Category", "Finding", "Review status"],
             [
                 [f.id, f.severity_label, f.category_label, f.title,
-                 REVIEW_STATUS_LABELS[reviews[f.id].status] if f.id in reviews else REVIEW_STATUS_LABELS["open"]]
+                 REVIEW_STATUS_LABELS[reviews[f.id].status] if f.id in reviews else REVIEW_STATUS_LABELS["pending"]]
                 for f in report.findings
             ],
         )
@@ -251,3 +253,65 @@ def verification_to_markdown(
     comparison = comparison_to_markdown(result.analysis, generated_at)
     out.append("## Files compared" + comparison.split("## Files compared", 1)[1].rstrip())
     return "\n".join(out) + "\n"
+
+
+# --- Change-impact and AI-assisted explanation reports -----------------------------------------------------
+def impact_to_markdown(result: "ImpactResult", catalog: "Catalog", generated_at: datetime | None = None) -> str:
+    """A change-impact report: what changed, which records may be affected, why, and what to review."""
+    stamp = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
+    change = result.change
+    config = catalog.configuration(change.config_id)
+    out = [
+        "# LabelGuard AI - change-impact report", "", f"Generated: {stamp}", "",
+        f"> {DISCLAIMER} The records below are SYNTHETIC demonstration data; no PLM, ERP or regulatory system was "
+        "queried. A label listed here may be affected; that is a pointer for a reviewer, not a finding of error.", "",
+        "## Changed parameter", "",
+        f"- **Parameter:** {FIELD_LABELS[change.parameter]}",
+        f"- **Product configuration:** {config.name if config else change.config_id} ({change.config_id})",
+        f"- **Old value:** {_cell(change.old_value) if change.old_value else 'not recorded'}",
+        f"- **New value:** {_cell(change.new_value) if change.new_value else 'not recorded'}", "",
+        "## Affected product records", "", "| Product | Configuration | Why |", "| --- | --- | --- |",
+    ]
+    out += [f"| {_cell(p.name)} | {_cell(p.config_name or '-')} | {_cell(p.why)} |" for p in result.products]
+    out += ["", f"## Potentially affected labels ({result.label_count})", ""]
+    if not result.items:
+        out += ["No label record was flagged by the configured impact rules.", ""]
+    else:
+        out += ["| Priority | Label | Status | Market | Language | Packaging | Rule | Reason | Recommended actions |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+        for i in result.items:
+            out.append(
+                f"| {SEVERITY_LABELS.get(i.severity, i.severity)} | {_cell(i.label.label_code)} v{i.label.version} | "
+                f"{i.label.status} | {_cell(i.market_name)} | {_cell(i.language_name)} | {_cell(i.packaging_name)} | "
+                f"{i.rule_id} | {_cell(i.reason)} | {_cell(i.action_text)} |")
+        out += ["", "### How each label is related to the change", ""]
+        out += [f"- **{i.label.label_code} v{i.label.version}** ({i.rule_id}): {_cell(i.relationship)}" for i in result.items]
+        out.append("")
+    if result.excluded:
+        out += ["## Labels of the changed product that were not flagged", ""]
+        out += [f"- {x.label.label_code} v{x.label.version} ({x.label.label_id}): {_cell(x.reason)}" for x in result.excluded]
+        out.append("")
+    if result.notes:
+        out += ["## Notes", ""] + [f"- {_cell(n)}" for n in result.notes] + [""]
+    return "\n".join(out)
+
+
+def explanation_to_markdown(explanation: "Explanation", generated_at: datetime | None = None) -> str:
+    """An explanation report, labelled with whether any of it was AI-assisted."""
+    stamp = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M UTC")
+    out = [
+        "# LabelGuard AI - finding explanations", "", f"Generated: {stamp}", "",
+        f"> **{explanation.label}.** {DISCLAIMER} Explanations restate findings produced by deterministic rules; "
+        "they do not change a finding, approve a label, or replace a qualified reviewer.", "",
+    ]
+    if explanation.source == "ai":
+        out += [f"Model: {explanation.provider} / {explanation.model}. The text was validated against the evidence "
+                "before it was shown.", ""]
+    if explanation.note:
+        out += [f"Note: {_cell(explanation.note)}", ""]
+    out += ["## Summary", "", explanation.summary, "", "## Findings", ""]
+    for item in explanation.items:
+        out += [f"- **{item.finding_id}** ({'AI-assisted' if item.generated_by == 'ai' else 'deterministic'}): "
+                f"{_cell(item.text)}  ", f"  Evidence: {', '.join(item.evidence_refs) or 'none recorded'}"]
+    out += ["", "## Questions for a qualified reviewer", ""] + [f"- {_cell(q)}" for q in explanation.questions] + [""]
+    return "\n".join(out)

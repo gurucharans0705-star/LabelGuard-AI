@@ -76,3 +76,11 @@ def tesseract_available():
     from labelguard.extraction.ocr import get_ocr_status
 
     return get_ocr_status().available
+
+
+@pytest.fixture(scope="session")
+def sample_verification(approved_pdf, revised_pdf):
+    """A real verification of the v1 -> v2 sample pair (computed once; results are immutable)."""
+    from labelguard.verification import verify_pair
+
+    return verify_pair((approved_pdf.read_bytes(), "approved_label_v1.pdf"), (revised_pdf.read_bytes(), "revised_label_v2.pdf"))

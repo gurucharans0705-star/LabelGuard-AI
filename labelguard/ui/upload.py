@@ -114,16 +114,36 @@ def _render_controls() -> None:
     if not ready:
         st.caption("Load two valid PDF files to enable the analysis.")
 
+    label_id = _label_link()
     if st.button("Start label analysis", type="primary", disabled=not ready, key="start_analysis"):
-        _run_analysis(approved, revised, use_ocr, run_visual, run_barcodes)
+        is_demo = bool(approved and revised and approved.source == "sample" and revised.source == "sample")
+        _run_analysis(approved, revised, use_ocr, run_visual, run_barcodes, is_demo=is_demo, label_id=label_id)
 
     if state.get_verification() is not None:
         st.success("An analysis is available for the loaded labels.")
         st.button("Open findings", on_click=state.goto, args=("Findings",), key="open_findings_upload")
 
 
+def _label_link() -> str | None:
+    """Optionally tie this analysis to a label record in the product catalog (shown only if a catalog exists)."""
+    catalog = state.load_catalog()
+    if catalog.is_empty:
+        return None
+    options = {"(not linked)": None} | {
+        f"{l.label_code} v{l.version} · {catalog.market_name(l.market_code)} · {catalog.language_name(l.language_code)} "
+        f"· {catalog.packaging_name(l.packaging_level_code)} ({l.label_id})": l.label_id
+        for l in catalog.labels
+    }
+    choice = st.selectbox(
+        "Link to a label record in the synthetic catalog (optional)", list(options), key="link_label",
+        help="Linked analyses appear in Product History under that label.",
+    )
+    return options[choice]
+
+
 def _run_analysis(
-    approved: state.LoadedFile, revised: state.LoadedFile, use_ocr: bool, run_visual: bool, run_barcodes: bool
+    approved: state.LoadedFile, revised: state.LoadedFile, use_ocr: bool, run_visual: bool, run_barcodes: bool,
+    *, is_demo: bool = False, label_id: str | None = None,
 ) -> None:
     with st.status("Analyzing labels...", expanded=True) as box:
         try:
@@ -150,6 +170,6 @@ def _run_analysis(
             st.error(f"An unexpected error occurred ({exc.__class__.__name__}). Please try different files.")
             return
         box.update(label="Analysis complete", state="complete", expanded=False)
-    state.store_verification(result)
+    state.store_verification(result, is_demo=is_demo, label_id=label_id)
     state.goto("Findings")
     st.rerun()

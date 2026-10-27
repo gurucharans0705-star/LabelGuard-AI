@@ -7,12 +7,10 @@ pytesseract>=0.3.10
 pillow>=10.0
 reportlab>=4.0
 pytest>=8.0
+anthropic>=0.40   # optional: used only when ANTHROPIC_API_KEY is set and AI mode is chosen
 numpy>=1.26
 opencv-python-headless>=4.9
 zxing-cpp>=2.2
 
-# Added on later days, when the feature that needs them is built:
-#   Day 4: anthropic                (optional AI explanations)
-#
 # OCR also needs the Tesseract program itself (a separate Windows installer, not a pip package).
 # The app works without it; only scanned (image-only) PDFs need it. See README.md.

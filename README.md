@@ -1,11 +1,13 @@
 # LabelGuard AI
 
-Medical device label verification and change-impact review (MVP in development, Day 2 of 4).
+Medical device label verification and change-impact review (MVP in development, Day 3 of 4).
 
 Upload an **approved** label and a **revised** label as PDFs. LabelGuard AI extracts the text (using OCR
 for scanned pages), pulls out key fields with the label text as evidence, and shows what was added,
-removed or modified. Day 2 adds a configurable rules engine that turns differences into ranked findings with
-evidence, a visual (artwork) comparison, barcode decoding and a review workflow (acknowledge / resolve).
+removed or modified. Day 2 added a configurable rules engine that turns differences into ranked findings with
+evidence, a visual (artwork) comparison and barcode decoding. Day 3 connects this to a **synthetic product catalog**
+(change-impact analysis), adds an **audit history**, a **review workflow** with named reviewers and rationales, and
+**optional AI-assisted explanations** that fall back to a deterministic explanation when no API key is set.
 
 > **Important:** LabelGuard AI is a decision-support tool. Its findings are evidence-based flags for
 > human review. They do not establish or certify regulatory compliance. All sample labels are fictional.
@@ -40,11 +42,20 @@ labelguard/
     models.py                  Result data classes (neutral wording, no "violation")
   validation/checks.py         Completeness observations ("not detected - please check")
   validation/identifiers.py    GTIN check digit, UDI extraction, label date parsing
-  db/database.py               SQLite run log + finding reviews + review history (never label text)
+  db/schema.py                 SQLite migrations (PRAGMA user_version); upgrades Day 1/2 databases in place
+  db/database.py               Analysis jobs, extracted fields, findings, reviews, review queue (never label PDFs)
+  db/audit.py                  Append-only audit log (written in the same transaction as the change)
+  db/catalog.py                Product catalog, demo data load/clear, saved impact results
+  db/explanations.py           Stored explanations (text + evidence references only)
+  impact/                      Change-impact engine, rule loader, demo catalog (no Streamlit, no database code)
+  ai/                          Provider adapter, prompt, strict response validation, deterministic fallback
+  workflow.py                  Thin orchestration: impact run, explanation, report-generated events
   reporting/export.py          Markdown comparison and verification reports
   samples/synthetic_labels.py  Fictional labels (approved, revised, incomplete, scanned)
-  ui/                          Streamlit pages: dashboard, upload, findings, visual, results, rules
-tests/                         pytest suite (188 tests)
+  ui/                          Streamlit pages (11, see below) and shared review controls
+config/impact_rules.toml       Change-impact rules (readable, editable)
+docs/INTEGRATION_POINTS.md     Where real PLM/ERP data would plug in (nothing is integrated today)
+tests/                         pytest suite (328 tests)
 data/samples/                  Generated sample PDFs
 ```
 
@@ -55,7 +66,7 @@ Severity (Critical review / High / Medium / Low / Informational) is a **workflow
 classification. A check that could not run (no OCR, no barcode decoder, a scan) is reported as **not verified**;
 it is never counted as a pass. If a label has no readable text (an image-only scan where OCR is unavailable
 or off), text rules are **not evaluated** for it (rule R-READ-001, built into the engine) instead of reporting
-every field as missing. The rules are deterministic; nothing here depends on an AI model.
+every field as missing. The rules and the impact analysis are deterministic; the AI layer only restates their results.
 
 ## Setup on Windows (PowerShell)
 
@@ -102,15 +113,66 @@ python -m labelguard.samples.synthetic_labels   # (re)creates the sample PDFs in
 
 Open a new terminal later? Activate the environment again (`.venv\Scripts\Activate.ps1`) first.
 
+## Pages
+
+Dashboard · Upload & Analyze · Findings (finding details and review) · Visual Comparison · Results ·
+**AI Explanations** · **Review Queue** · **Change Impact** · **Product History** · **Audit History** · Rules.
+Review controls and all business logic are shared: pages call the same functions (`db/`, `impact/`, `ai/`, `workflow.py`).
+
 ## Try it
 
 1. Open **Upload & Analyze**.
 2. Upload your own two PDFs, or expand "No labels at hand?" and press **Load selected samples**.
 3. Press **Start label analysis**. The **Findings** page opens: summary cards, filters, a findings table,
-   expandable details (original vs revised, evidence, pages, recommended action) and Acknowledge / Resolve.
+   expandable details (original vs revised, evidence, pages, recommended action) and review controls.
 4. **Visual Comparison** shows old and new pages side by side with changed areas marked, plus decoded barcodes.
    **Results** keeps the Day 1 field and text comparison. **Rules** lists every rule.
 5. To see OCR, load *Scanned copy of approved label (image only)* as the revised label.
+6. **Change Impact -> Demonstration data -> Load synthetic demo catalog**, analyze the sample pair, then open
+   **Change Impact** and press **Analyze impact of this change** to see which catalog label records may need review,
+   with markets, languages, the reason and the recommended action for each. A *What-if change* tab tests any parameter.
+7. Enter your name in **Reviewer** on the Findings page, then Start review / Escalate / Resolve / Reopen.
+   Resolve and Escalate need a short rationale. **Review Queue** lists every finding across analyses;
+   **Audit History** shows each event (it is never edited or deleted by the app).
+
+## Review workflow
+
+Statuses: **Pending review -> Under review -> Escalated / Resolved** (and Reopen back to Pending). Every change records
+the reviewer, a UTC timestamp and a rationale. A named person is required: names such as "AI" or "Claude" are
+refused, and there is no "approved" or "released" status. A resolved finding stays in the queue, the review history
+and the audit log. A status is a person's decision about one finding for one pair of files; it does not change the
+finding and it is not a label approval or release.
+
+## Optional AI explanations
+
+The app works fully without any key. To enable AI-assisted explanations, set environment variables **before**
+starting the app (the app does **not** read a `.env` file, and no key is ever written to code, logs, the database or reports):
+
+```powershell
+$env:ANTHROPIC_API_KEY = "paste-your-key-here"      # this PowerShell window only
+pip install anthropic                                # only needed once, for the optional AI layer
+streamlit run app.py
+```
+
+Optional: `LABELGUARD_AI_MODEL` (default `claude-sonnet-5-5`), `LABELGUARD_AI_TIMEOUT_S` (30),
+`LABELGUARD_AI_MAX_TOKENS` (1500), `LABELGUARD_AI_ENABLED=false` to switch AI off even when a key exists.
+On the **AI Explanations** page choose *AI-assisted* (shown only when a key is configured; you must confirm that the
+extracted evidence quotes will be sent to the API). The model receives finding ids, rule descriptions and evidence
+quotes only - never the PDFs. Its answer is shown only if it passes strict validation (known finding ids, cited
+evidence that belongs to the finding, no invented values, numbers, quotes or regulation citations, no compliance,
+approval, release or safety claims). Anything else - no key, timeout, API error, malformed or ungrounded answer -
+falls back to the deterministic explanation, with a note saying why. AI text is always labelled **AI-assisted**.
+
+## Database
+
+SQLite file (`data/labelguard.db`, or `LABELGUARD_DB_PATH`). It stores identifiers, document names and SHA-256 hashes,
+extracted field values, finding text and short evidence quotes, reviewer names, rationales and timestamps. It does
+**not** store PDFs, page images or full label text. Treat the file as confidential if you analyse real labels.
+Tables: `analysis_runs` (jobs), `extracted_fields`, `analysis_findings`, `finding_reviews`, `review_events`,
+`audit_events` (append-only), `products`, `product_configurations`, `config_parameters`, `product_relationships`,
+`label_versions`, `label_required_fields`, `label_review_records`, `markets`, `languages`, `packaging_levels`,
+`impact_runs`, `impact_items`, `ai_explanations`. Synthetic rows carry `is_demo = 1`; **Change Impact -> Demonstration
+data -> Clear** removes them (the audit log keeps its history and records the clearing).
 
 ## Editing the rules
 
@@ -128,10 +190,9 @@ regressed. It is **not** an estimate of accuracy on real labels.
 
 ## Settings (all optional)
 
-See `.env.example`: `TESSERACT_CMD`, `LABELGUARD_OCR_ENABLED`, `LABELGUARD_OCR_LANG`,
-`LABELGUARD_MAX_UPLOAD_MB` (default 25), `LABELGUARD_MAX_PAGES` (default 20), `LABELGUARD_DB_PATH`,
-`LABELGUARD_RULES_PATH`.
-No API keys are used or stored.
+See `.env.example` (a list of the variables - it is not loaded automatically): `TESSERACT_CMD`,
+`LABELGUARD_OCR_ENABLED`, `LABELGUARD_OCR_LANG`, `LABELGUARD_MAX_UPLOAD_MB` (default 25), `LABELGUARD_MAX_PAGES`
+(default 20), `LABELGUARD_DB_PATH`, `LABELGUARD_RULES_PATH`, `LABELGUARD_IMPACT_RULES_PATH`, and the AI variables above.
 
 ## Known limitations
 
@@ -146,4 +207,12 @@ No API keys are used or stored.
 - Dates like 04/05/2029 are ambiguous and are not interpreted. Moved or reworded warnings are matched by
   text similarity and may be reported as removed + added.
 - The synthetic corpus measures regression only. No real labels were used.
-- Not built yet: PDF reports, optional AI explanations (Day 4), user accounts.
+- The product catalog is synthetic and local. LabelGuard is **not** connected to any PLM, ERP, SAP, FDA or EU system
+  (see `docs/INTEGRATION_POINTS.md`). Impact rules are organisation workflow rules in `config/impact_rules.toml`, not
+  regulatory requirements; "no label flagged" does not mean "no label affected".
+- Reviewer names are typed, not authenticated, and the audit log's append-only triggers guard against mistakes only;
+  someone with direct access to the database file could change it. There are no user accounts.
+- AI validation is deliberately strict and may reject acceptable answers (the deterministic text is shown then).
+  It checks grounding and forbidden claims by pattern; it cannot prove that an explanation is correct.
+  AI behaviour was tested with mocked responses only; no live API call was made during development.
+- Not built yet: PDF reports, user accounts and authentication.
