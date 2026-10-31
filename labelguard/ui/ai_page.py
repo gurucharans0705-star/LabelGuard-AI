@@ -17,7 +17,9 @@ from labelguard.ai.models import AI_ASSISTED, Explanation
 from labelguard.ai.prompt import resolve_ref
 from labelguard.db import database, explanations as explanation_db
 from labelguard.reporting.export import explanation_to_markdown
+from labelguard.ui.report_widget import render_report_download
 from labelguard.rules.models import Finding
+from labelguard.safe_text import escape_markdown as md
 from labelguard.ui import state
 from labelguard.ui.style import badge, page_header
 
@@ -103,9 +105,9 @@ def _render_explanation(explanation: Explanation, findings: tuple[Finding, ...])
     if explanation.source == AI_ASSISTED:
         st.caption("AI-assisted text was checked against the evidence before it was shown. Verify it against the labels.")
     if explanation.note:
-        st.warning(explanation.note)
+        st.warning(md(explanation.note))
     st.markdown("**Summary for the reviewer**")
-    st.write(explanation.summary)
+    st.markdown(md(explanation.summary))
     by_id = {f.id: f for f in findings}
     st.markdown("**Explanation of each finding**")
     for item in explanation.items:
@@ -114,10 +116,10 @@ def _render_explanation(explanation: Explanation, findings: tuple[Finding, ...])
         with st.expander(title):
             st.markdown(badge("AI-assisted" if item.generated_by == AI_ASSISTED else "Deterministic",
                               "ok" if item.generated_by == AI_ASSISTED else "info"), unsafe_allow_html=True)
-            st.write(item.text)
+            st.markdown(md(item.text))
             if finding:
-                st.caption(f"Finding ID {finding.id} · original values: approved \"{finding.approved_value or '—'}\", "
-                           f"revised \"{finding.revised_value or '—'}\"")
+                st.caption(f"Finding ID {finding.id} · original values: approved \"{md(finding.approved_value) or '—'}\", "
+                           f"revised \"{md(finding.revised_value) or '—'}\"")
             st.markdown("**Evidence this explanation cites**")
             shown = False
             for ref in item.evidence_refs:
@@ -131,10 +133,11 @@ def _render_explanation(explanation: Explanation, findings: tuple[Finding, ...])
                 st.caption("No evidence quote was recorded for this finding.")
     st.markdown("**Questions a qualified reviewer could ask**")
     for question in explanation.questions:
-        st.write(f"- {question}")
-    report = explanation_to_markdown(explanation)
-    st.download_button("Download explanation (Markdown)", report, file_name="labelguard_explanation.md", mime="text/markdown",
-                       key="download_explanation", on_click=state.log_report, args=("Explanation report", "labelguard_explanation.md", report))
+        st.markdown(f"- {md(question)}")
+    render_report_download(
+        "Download explanation (Markdown)", lambda: explanation_to_markdown(explanation), kind="Explanation report",
+        filename="labelguard_explanation.md", mime="text/markdown", key="download_explanation",
+    )
 
 
 def _render_saved(findings: tuple[Finding, ...]) -> None:

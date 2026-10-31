@@ -160,7 +160,7 @@ def extract_pdf(
         try:
             data = path.read_bytes()
         except OSError as exc:
-            raise ExtractionError(f"Could not read the file: {exc}") from exc
+            raise ExtractionError(f"Could not read the file ({exc.__class__.__name__}).") from exc
         filename = filename or path.name
     else:
         data = source

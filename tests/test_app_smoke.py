@@ -270,3 +270,28 @@ def test_scanned_revised_label_without_ocr_shows_not_verified_not_false_findings
     for page in ("Dashboard", "Findings", "Visual Comparison", "Results", "Rules"):
         open_page(at, page)
         assert not at.exception, page
+
+
+# --- Day 4 usability ---------------------------------------------------------------------------------
+def test_filters_can_be_reset_and_the_page_says_when_they_narrow_the_list():
+    at = analysed_app()
+    assert "filters are narrowing" not in texts(at.markdown)
+    assert not [b for b in at.button if b.key == "reset_filters"]  # nothing to reset yet
+    at.multiselect(key="filter_severity").set_value(["critical_review"]).run()
+    assert not at.exception
+    total = len(at.session_state["verification"].report.findings)
+    assert "filters are narrowing the list" in texts(at.markdown) and f"of {total} finding" in texts(at.markdown)
+    at.text_input(key="filter_text").set_value("zzz-no-such-text").run()
+    assert "Reset filters" in texts(at.info)  # the empty state tells the person what to do
+    at.button(key="reset_filters").click().run()
+    assert not at.exception
+    assert len(at.multiselect(key="filter_severity").value) == 5 and at.text_input(key="filter_text").value == ""
+    assert f"Showing **{total}** of {total}" in texts(at.markdown) and "narrowing" not in texts(at.markdown)
+
+
+def test_dashboard_shows_full_file_names_under_the_tiles_not_inside_them():
+    at = analysed_app()
+    open_page(at, "Dashboard")
+    tiles = {m.label: m.value for m in at.metric}
+    assert tiles["Approved label"] == "Ready" and tiles["Revised label"] == "Ready"
+    assert "Approved label (v1)" in texts(at.caption) or "approved_label_v1.pdf" in texts(at.caption)

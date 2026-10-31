@@ -10,14 +10,20 @@ from labelguard.comparison.models import KIND_LABELS
 from labelguard.db import database
 from labelguard.pipeline import AnalysisResult
 from labelguard.rules.models import SEVERITIES, SEVERITY_LABELS
+from labelguard.safe_text import escape_markdown as md
 from labelguard.ui import state
 from labelguard.ui.style import page_header
 
 
 def _file_status(loaded: state.LoadedFile | None) -> str:
+    """A short status for the tile; the file name goes underneath, where a long name is not cut off."""
     if loaded is None:
         return "Not loaded"
-    return loaded.name if loaded.valid else "Invalid file"
+    return "Ready" if loaded.valid else "Invalid file"
+
+
+def _file_name(loaded: state.LoadedFile | None) -> str:
+    return loaded.name if loaded is not None else "No file yet"
 
 
 def render_dashboard() -> None:
@@ -29,7 +35,9 @@ def render_dashboard() -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Approved label", _file_status(approved))
+    c1.caption(_file_name(approved))
     c2.metric("Revised label", _file_status(revised))
+    c2.caption(_file_name(revised))
     c3.metric("Analysis", "Complete" if analysis else "Not run")
     c4.metric("OCR engine", "Ready" if ocr.available else "Unavailable")
     if not ocr.available:
@@ -74,7 +82,7 @@ def _summary(analysis: AnalysisResult) -> None:
                 continue
             before = change.approved.value if change.approved else "not present"
             after = change.revised.value if change.revised else "not present"
-            rows.append(f"- **{item.label}** ({KIND_LABELS[change.kind].lower()}): {before} → {after}")
+            rows.append(f"- **{item.label}** ({KIND_LABELS[change.kind].lower()}): {md(before)} → {md(after)}")
     if rows:
         st.markdown("\n".join(rows[:8]))
         if len(rows) > 8:

@@ -6,4 +6,21 @@ __pycache__/
 data/uploads/
 data/reports/
 data/*.db
-.venv311/
+
+# Virtual environments under any name (.venv311, venv, env, ...): never upload third-party packages
+.venv*/
+venv*/
+env/
+*.egg-info/
+# Local databases, packaged copies and screenshots made while testing
+*.db
+*.zip
+e2e_screenshots/
+# Generated test output
+final-test-output.txt
+test-output.txt
+
+# Environment and secrets
+.env
+.env.*
+!.env.example

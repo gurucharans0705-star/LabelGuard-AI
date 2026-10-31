@@ -10,7 +10,8 @@ from labelguard.comparison.engine import inline_diff
 from labelguard.comparison.models import KIND_LABELS, TextChange
 from labelguard.fields.models import FIELD_LABELS, NOT_DETECTED
 from labelguard.pipeline import AnalysisResult, LabelAnalysis
-from labelguard.reporting.export import NOT_DETECTED_BOTH, comparison_to_markdown, field_rows
+from labelguard.reporting.export import NOT_DETECTED_BOTH, comparison_to_markdown, field_csv, field_rows
+from labelguard.ui.report_widget import render_report_download
 from labelguard.ui import state
 from labelguard.ui.components import format_size, render_notes
 from labelguard.ui.style import page_header
@@ -41,12 +42,9 @@ def render_results_page() -> None:
     render_notes(analysis.approved.ingestion.notes, "Approved label")
     render_notes(analysis.revised.ingestion.notes, "Revised label")
 
-    st.download_button(
-        "Download comparison report (Markdown)",
-        comparison_to_markdown(analysis),
-        file_name="labelguard_comparison_report.md",
-        mime="text/markdown",
-        key="download_report",
+    render_report_download(
+        "Download comparison report (Markdown)", lambda: comparison_to_markdown(analysis),
+        kind="Comparison report", filename="labelguard_comparison_report.md", mime="text/markdown", key="download_report",
     )
     if st.session_state.get("run_id"):
         st.caption(f"This analysis was added to the run log as run #{st.session_state['run_id']}.")
@@ -90,7 +88,7 @@ def _render_differences(analysis: AnalysisResult) -> None:
     st.dataframe(styler, hide_index=True, width="stretch")
     st.download_button(
         "Download field comparison (CSV)",
-        frame.to_csv(index=False),
+        field_csv(comparison),
         file_name="field_comparison.csv",
         mime="text/csv",
         key="download_field_csv",

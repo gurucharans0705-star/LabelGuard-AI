@@ -10,6 +10,7 @@ import streamlit as st
 from labelguard.db import database
 from labelguard.db.database import REVIEW_STATUS_LABELS, REVIEW_STATUSES
 from labelguard.reporting.export import verification_to_markdown
+from labelguard.ui.report_widget import render_report_download
 from labelguard.rules.models import (
     RESULT_FLAGGED,
     SEVERITIES,
@@ -43,14 +44,10 @@ def render_findings_page() -> None:
 
     _render_summary(result)
     st.caption(SEVERITY_NOTE)
-    report_text = verification_to_markdown(result, state.get_reviews())
-    st.download_button(
-        "Download verification report (Markdown)",
-        report_text,
-        file_name="labelguard_verification_report.md",
-        mime="text/markdown",
+    render_report_download(
+        "Download verification report (Markdown)", lambda: verification_to_markdown(result, state.get_reviews()),
+        kind="Verification report", filename="labelguard_verification_report.md", mime="text/markdown",
         key="download_verification_report",
-        on_click=state.log_report, args=("Verification report", "labelguard_verification_report.md", report_text),
     )
     render_reviewer_field()
 
@@ -59,18 +56,20 @@ def render_findings_page() -> None:
         _render_empty(result)
         return
 
-    matching = _render_filters(findings)
-    st.write(f"Showing **{len(matching)}** of {len(findings)} finding(s).")
+    matching, narrowed = _render_filters(findings)
+    st.write(f"Showing **{len(matching)}** of {len(findings)} finding(s)" + (" (filters are narrowing the list)." if narrowed else "."))
+    if narrowed:
+        st.button("Reset filters", on_click=_reset_filters, key="reset_filters")
     if not matching:
-        st.info("No finding matches the current filters. Widen the filters above to see more.")
+        st.info("No finding matches the current filters. Press **Reset filters** to see every finding again.")
     else:
         st.dataframe(
             pd.DataFrame(_table_rows(matching)),
             hide_index=True,
             width="stretch",
             column_config={
-                "Severity": st.column_config.TextColumn(width="small"),
-                "Rule": st.column_config.TextColumn(width="small"),
+                "Severity": st.column_config.TextColumn(width="medium"),
+                "Rule": st.column_config.TextColumn(width="medium"),
                 "Finding": st.column_config.TextColumn(width="large"),
                 "Pages": st.column_config.TextColumn(width="small"),
                 "Evidence": st.column_config.TextColumn(width="small"),
@@ -111,9 +110,20 @@ def _render_empty(result: VerificationResult) -> None:
 
 
 # --- Filters and table ------------------------------------------------------------------------------------
-def _render_filters(findings: tuple[Finding, ...]) -> list[Finding]:
+FILTER_KEYS = ("filter_severity", "filter_category", "filter_status", "filter_result", "filter_text")
+
+
+def _reset_filters() -> None:
+    """Back to 'show everything'. Removing a widget's key makes it start from its default again."""
+    for key in FILTER_KEYS:
+        st.session_state.pop(key, None)
+
+
+def _render_filters(findings: tuple[Finding, ...]) -> tuple[list[Finding], bool]:
+    """The filter widgets. Returns the matching findings and whether any filter is narrowing the list."""
     categories = sorted({f.category_label for f in findings})
-    c1, c2, c3, c4 = st.columns(4)
+    # Two filters per row: with four across, the selected options are clipped and a reader cannot see what is chosen.
+    (c1, c2), (c3, c4) = st.columns(2), st.columns(2)
     severities = c1.multiselect(
         "Severity", SEVERITIES, default=list(SEVERITIES), format_func=SEVERITY_LABELS.get, key="filter_severity"
     )
@@ -140,7 +150,11 @@ def _render_filters(findings: tuple[Finding, ...]) -> list[Finding]:
         ).casefold()
         return needle in haystack
 
-    return [finding for finding in findings if matches(finding)]
+    narrowed = bool(
+        needle or set(severities) != set(SEVERITIES) or set(chosen_categories) != set(categories)
+        or set(statuses) != set(REVIEW_STATUSES) or set(kinds) != set(_RESULT_LABELS)
+    )
+    return [finding for finding in findings if matches(finding)], narrowed
 
 
 def _short(text: str | None, limit: int = 80) -> str:

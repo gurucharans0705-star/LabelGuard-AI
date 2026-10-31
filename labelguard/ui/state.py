@@ -235,9 +235,12 @@ def load_catalog():
     from labelguard.db import catalog
 
     try:
-        return catalog.load_catalog()
+        loaded = catalog.load_catalog()
+        st.session_state["catalog_unreadable"] = False
+        return loaded
     except (sqlite3.Error, OSError):
         logger.exception("Could not read the catalog")
+        st.session_state["catalog_unreadable"] = True  # lets the page say why the catalog looks empty
         from labelguard.impact.models import Catalog
 
         return Catalog()

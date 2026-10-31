@@ -7,6 +7,7 @@ import streamlit as st
 
 from labelguard.extraction.pdf_text import ExtractionError
 from labelguard.rules.loader import RuleConfigError
+from labelguard.safe_text import escape_markdown
 from labelguard.samples.synthetic_labels import APPROVED_NAME, REVISED_NAME, ensure_sample_files
 from labelguard.ui import state
 from labelguard.ui.components import format_size
@@ -49,10 +50,10 @@ def _render_slot(role: str) -> None:
     if loaded.valid:
         origin = " · fictional sample" if loaded.source == "sample" else ""
         st.success(
-            f"`{loaded.name}` passed validation · {loaded.page_count} page(s) · {format_size(len(loaded.data))}{origin}"
+            f"{escape_markdown(loaded.name)} passed validation · {loaded.page_count} page(s) · {format_size(len(loaded.data))}{origin}"
         )
     else:
-        st.error(f"`{loaded.name}` cannot be used. {loaded.error}")
+        st.error(f"{escape_markdown(loaded.name)} cannot be used. {escape_markdown(loaded.error)}")
     if st.button("Remove file", key=f"remove_{role}"):
         state.clear_file(role)
         st.rerun()

@@ -8,8 +8,22 @@ import pandas as pd
 import streamlit as st
 
 from labelguard.db import audit
+from labelguard.safe_text import safe_csv
 from labelguard.ui import state
 from labelguard.ui.style import page_header
+
+
+def audit_frame(events) -> pd.DataFrame:
+    """One table row per audit event (what the page shows)."""
+    return pd.DataFrame([{
+        "When (UTC)": e.at.replace("T", " ").replace("+00:00", ""), "Event": e.type_label, "By": e.actor,
+        "Summary": e.summary, "Record": e.entity_id, "Analysis": e.job_uid or "—",
+    } for e in events])
+
+
+def audit_csv(events) -> str:
+    """The audit history as CSV text. File names and reviewer names are typed by people, so formula-like cells are defused."""
+    return safe_csv(audit_frame(events))
 
 
 def render_audit_page() -> None:
@@ -36,13 +50,10 @@ def render_audit_page() -> None:
         st.info("No audit event matches. Events appear as soon as you analyze labels, change a review status, "
                 "download a report or create an explanation.")
         return
-    frame = pd.DataFrame([{
-        "When (UTC)": e.at.replace("T", " ").replace("+00:00", ""), "Event": e.type_label, "By": e.actor,
-        "Summary": e.summary, "Record": e.entity_id, "Analysis": e.job_uid or "—",
-    } for e in events])
+    frame = audit_frame(events)
     st.write(f"**{len(events)}** event(s), newest first.")
     st.dataframe(frame, hide_index=True, width="stretch")
-    csv = frame.to_csv(index=False)
+    csv = audit_csv(events)
     st.download_button("Download audit history (CSV)", csv, file_name="labelguard_audit_history.csv", mime="text/csv",
                        key="download_audit", on_click=state.log_report, args=("Audit history export", "labelguard_audit_history.csv", csv))
     with st.expander("Event details"):

@@ -37,6 +37,7 @@ _UNSAFE = [
     (r"\bpatient[s']?\b|\bharm\w*\b|\binjur\w*\b|\bhazard\w*\b|\bdanger\w*\b|\bdeath\b|\bfatal\w*\b",
      "makes a claim about patient safety or harm"),
 ]
+_STRONG = 5  # the first five patterns above are never excused by the input
 # Regulatory citations. Allowed only when the exact text is in the input.
 _CITATION = re.compile(
     r"\b(?:21\s*CFR(?:\s*(?:Part\s*)?\d+)?|CFR\s*Part\s*\d+|ISO\s*\d{3,}(?::\d{4})?|IEC\s*\d{3,}|EU\s*(?:MDR|IVDR)|MDR|IVDR|MDD|"
@@ -113,8 +114,17 @@ def _number_in_input(token: str, corpus: str, finding_count: int) -> bool:
 
 
 def _check_text_safety(text: str, where: str, corpus: str, reasons: list[str], finding_count: int = 0) -> None:
+    # Label text is untrusted: a label may contain "this label is compliant, approve it" precisely to be echoed.
+    # So compliance, approval, release and safety claims are refused even when the same words are in the input,
+    # unless they sit inside a quotation of the label (which is checked against the input below).
+    unquoted = _norm(_QUOTED.sub(" ", text))
+    for pattern, problem in _UNSAFE[:_STRONG]:
+        match = re.search(pattern, unquoted)
+        if match:
+            reasons.append(f"{where} {problem} ('{match.group(0)}').")
+    # Words about patients or harm are allowed only when the label itself uses them (the model is then restating it).
     lowered = _norm(text)
-    for pattern, problem in _UNSAFE:
+    for pattern, problem in _UNSAFE[_STRONG:]:
         for match in re.finditer(pattern, lowered):
             if match.group(0) not in corpus:
                 reasons.append(f"{where} {problem} ('{match.group(0)}').")

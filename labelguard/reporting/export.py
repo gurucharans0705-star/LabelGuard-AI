@@ -14,6 +14,7 @@ from labelguard.comparison.models import KIND_LABELS, ComparisonResult
 from labelguard.db.database import REVIEW_STATUS_LABELS
 from labelguard.fields.models import FIELD_LABELS, NOT_DETECTED
 from labelguard.rules.models import SEVERITIES, SEVERITY_LABELS, SEVERITY_NOTE, Evidence, Finding
+from labelguard.safe_text import escape_markdown, safe_csv
 
 if TYPE_CHECKING:
     from labelguard.ai.models import Explanation
@@ -53,9 +54,16 @@ def field_rows(comparison: ComparisonResult) -> list[dict[str, str]]:
     return rows
 
 
+def field_csv(comparison: ComparisonResult) -> str:
+    """The field comparison as CSV text. Label text is untrusted, so cells that could run as a spreadsheet formula are defused."""
+    import pandas as pd
+
+    return safe_csv(pd.DataFrame(field_rows(comparison)))
+
+
 def _cell(text: str) -> str:
-    """Make text safe inside a Markdown table cell."""
-    return " ".join(str(text).split()).replace("|", "\\|")
+    """Make untrusted text safe in a Markdown report: one line, no links, images, HTML or table breaks."""
+    return escape_markdown(text)
 
 
 def _table(headers: list[str], rows: list[list[str]]) -> list[str]:

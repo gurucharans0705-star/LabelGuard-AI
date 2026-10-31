@@ -137,3 +137,33 @@ def test_downloading_a_report_is_recorded_in_the_audit_trail():
     state.log_report("Verification report", "r.md", "# body")  # the callback behind every download button
     (event,) = audit.list_events(event_types=[audit.REPORT_GENERATED])
     assert event.details["sha256"] and "body" not in str(event.details)
+
+
+def test_review_queue_hides_resolved_by_default_says_so_and_shows_the_rationale_when_asked():
+    """The queue is a work list: Resolved is filtered out by default, the page says how many are hidden, and nothing is deleted."""
+    at = demo_analysed_app()
+    finding = at.session_state["verification"].report.flagged[0]
+    at.text_input(key="reviewer_name").set_value("QA Tester").run()
+    at.text_input(key=f"note_{finding.id}").set_value("matches change request CR-9").run()
+    at.button(key=f"res_{finding.id}").click().run()
+    open_page(at, "Review Queue")
+    no_errors(at)
+    assert "1 resolved finding(s) are hidden by the status filter; they are not deleted" in texts(at.markdown)
+    at.multiselect(key="queue_status").select("resolved").run()
+    no_errors(at)
+    assert at.text_input(key=f"note_q{database.list_runs(1)[0].id}_{finding.id}").value == "matches change request CR-9"
+    assert "Resolved" in [m.label for m in at.metric] and [m.value for m in at.metric if m.label == "Resolved"] == ["1"]
+
+
+def test_an_unreadable_database_is_explained_on_the_change_impact_page(tmp_path, monkeypatch):
+    """Found in Day 4 exploratory testing: a damaged database used to look like an ordinary empty catalog."""
+    from labelguard import config
+
+    broken = tmp_path / "broken.db"
+    broken.write_bytes(b"this is not a sqlite database " * 100)
+    monkeypatch.setattr(config, "DB_PATH", broken)
+    at = open_page(new_app(), "Change Impact")
+    no_errors(at)
+    assert any("could not be read" in w.value for w in at.warning)
+    at = open_page(at, "Dashboard")
+    no_errors(at)

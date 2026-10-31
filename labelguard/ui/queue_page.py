@@ -9,6 +9,7 @@ import streamlit as st
 from labelguard.db import database
 from labelguard.db.database import REVIEW_STATUS_LABELS, REVIEW_STATUSES, QueueItem
 from labelguard.rules.models import SEVERITIES, SEVERITY_LABELS, SEVERITY_NOTE
+from labelguard.safe_text import escape_markdown as md
 from labelguard.ui import state
 from labelguard.ui.finding_view import render_finding_body
 from labelguard.ui.review_widget import render_review_controls, render_reviewer_field
@@ -34,10 +35,10 @@ def render_queue_page() -> None:
     _render_counts(items)
     st.caption(SEVERITY_NOTE)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)  # two per row so the chosen options stay readable
     statuses = c1.multiselect("Status", REVIEW_STATUSES, default=list(_TO_DO), format_func=REVIEW_STATUS_LABELS.get, key="queue_status")
     severities = c2.multiselect("Priority", SEVERITIES, default=list(SEVERITIES), format_func=SEVERITY_LABELS.get, key="queue_severity")
-    needle = c3.text_input("Search (finding, rule, file name)", key="queue_search").strip().casefold()
+    needle = st.text_input("Search (finding, rule, file name)", key="queue_search").strip().casefold()
     d1, d2 = st.columns(2)
     d1.checkbox("Also list items that could not be verified", key="queue_unverified")
     show_demo = d2.checkbox("Include analyses of the fictional sample labels", value=True, key="queue_demo")
@@ -65,11 +66,17 @@ def _render_counts(items: list[QueueItem]) -> None:
         column.metric(REVIEW_STATUS_LABELS[status], counts[status])
 
 
+def _clip(text: str | None, limit: int = 80) -> str:
+    flat = " ".join((text or "").split())
+    return "—" if not flat else (flat if len(flat) <= limit else flat[: limit - 1] + "…")
+
+
 def _row(item: QueueItem) -> dict[str, str]:
     return {
         "Priority": item.finding.severity_label, "Rule": item.finding.rule_id, "Finding": item.finding.title,
         "Labels compared": f"{item.approved_filename} → {item.revised_filename}",
         "Status": REVIEW_STATUS_LABELS[item.status], "Reviewer": item.reviewer or "—",
+        "Rationale": _clip(item.rationale),
         "Updated (UTC)": (item.updated_at or "—").replace("T", " ").replace("+00:00", ""),
     }
 
@@ -77,7 +84,7 @@ def _row(item: QueueItem) -> dict[str, str]:
 def _render_item(item: QueueItem) -> None:
     finding = item.finding
     with st.expander(f"{finding.severity_label}  ·  {finding.rule_id}  ·  {finding.title}  ·  {REVIEW_STATUS_LABELS[item.status]}"):
-        st.caption(f"{item.approved_filename} → {item.revised_filename} · analysis {item.job_uid} · {item.created_at.replace('T', ' ').replace('+00:00', ' UTC')}"
+        st.caption(f"{md(item.approved_filename)} → {md(item.revised_filename)} · analysis {item.job_uid} · {item.created_at.replace('T', ' ').replace('+00:00', ' UTC')}"
                    + (" · fictional sample" if item.is_demo else ""))
         render_finding_body(finding)
         target = state.ReviewTarget(finding.id, finding.rule_id, finding.severity, item.approved_sha256, item.revised_sha256)

@@ -75,10 +75,13 @@ def test_database_location_can_be_given_explicitly(sample_analysis, tmp_path):
 
 # --- Markdown report -------------------------------------------------------------------------------
 def test_report_contains_files_changes_and_evidence(sample_analysis):
+    from labelguard.safe_text import escape_markdown
+
     report = comparison_to_markdown(sample_analysis, generated_at=datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc))
     assert "Generated: 2026-01-02 03:04 UTC" in report
     for expected in (
-        "approved_label_v1.pdf", "revised_label_v2.pdf",
+        # file names are untrusted text, so the report writes them Markdown-escaped (see test_untrusted_output.py)
+        escape_markdown("approved_label_v1.pdf"), escape_markdown("revised_label_v2.pdf"),
         sample_analysis.approved.document.sha256, sample_analysis.revised.document.sha256,
         "NW-IV200-20", "NW-IV200-15",
         "Missing from revised label", "Do not use if package is damaged.",

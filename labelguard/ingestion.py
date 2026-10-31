@@ -6,6 +6,9 @@ low confidence), so the reviewer never assumes text is complete when it is not.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import stat
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -24,6 +27,47 @@ from labelguard.extraction.pdf_text import (
 )
 
 ProgressCallback = Callable[[str], None]
+
+TEMP_PREFIX = "labelguard_"
+STALE_TEMP_AFTER_S = 3600  # a folder this old cannot belong to a read that is still running
+
+
+_REPARSE_POINT = 0x400  # Windows FILE_ATTRIBUTE_REPARSE_POINT: set on symbolic links AND on directory junctions
+
+
+def _is_link_like(info: os.stat_result) -> bool:
+    """True for anything that points somewhere else: a POSIX symlink, a Windows symlink or a Windows junction.
+
+    `Path.is_symlink()` is False for a junction, and a junction needs no administrator right to create, so it is the
+    kind of link a Windows user can really meet. Takes the result of `lstat` (which follows nothing).
+    """
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & _REPARSE_POINT)
+
+
+def remove_stale_temp_folders(max_age_s: float = STALE_TEMP_AFTER_S, *, now: float | None = None) -> int:
+    """Delete upload folders left behind by a process that was killed in the middle of reading a label.
+
+    A normal run, and a run that fails with an exception, always removes its own folder; only a hard kill can leave
+    one. To be safe this removes a folder only if it is a real directory (not a symlink or Windows junction) whose name starts with the
+    prefix, that is older than `max_age_s`, and that holds nothing but the `upload.pdf` this module writes.
+    Returns how many folders were removed.
+    """
+    import time
+
+    current = time.time() if now is None else now
+    removed = 0
+    for folder in Path(tempfile.gettempdir()).glob(f"{TEMP_PREFIX}*"):
+        try:
+            info = folder.lstat()  # never follows a link
+            if _is_link_like(info) or not stat.S_ISDIR(info.st_mode) or current - info.st_mtime < max_age_s:
+                continue
+            if {item.name for item in folder.iterdir()} - {"upload.pdf"}:
+                continue
+            shutil.rmtree(folder)
+            removed += 1
+        except OSError:
+            continue  # in use, not ours to delete, or already gone: leave it
+    return removed
 
 
 @dataclass(frozen=True)
@@ -67,7 +111,7 @@ def ingest_pdf(
     say(f"Reading text from {filename}")
     # The upload is processed from a private temporary folder that is always removed,
     # so no uploaded label is left on disk. (Never trust the uploaded file name for paths.)
-    with tempfile.TemporaryDirectory(prefix="labelguard_") as folder:
+    with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as folder:
         path = Path(folder) / "upload.pdf"
         path.write_bytes(data)
         document = extract_pdf(path, filename=filename)

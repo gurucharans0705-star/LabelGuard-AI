@@ -4,6 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from labelguard.rules.models import RESULT_FLAGGED, Evidence, Finding
+from labelguard.safe_text import escape_markdown as md
 
 SOURCE_LABELS = {"approved": "Approved label", "revised": "Revised label", "both": "Both labels"}
 
@@ -15,10 +16,10 @@ def render_evidence(item: Evidence) -> None:
         st.markdown(f"**{source} · {where}**")
         st.code(item.text or "(no text recorded)", language=None)
     elif item.kind == "absence":
-        st.caption(f"{source}: {item.text}")
+        st.caption(f"{source}: {md(item.text)}")
     else:
         kind = "image region" if item.kind == "region" else "measurement"
-        st.caption(f"{source} · {where} · {kind}: {item.text}")
+        st.caption(f"{source} · {where} · {kind}: {md(item.text)}")
 
 
 def render_finding_body(finding: Finding) -> None:
@@ -28,7 +29,7 @@ def render_finding_body(finding: Finding) -> None:
         f"{'Discrepancy flagged' if finding.result == RESULT_FLAGGED else 'Could not be verified (not a pass)'}"
         f" · Finding ID {finding.id}"
     )
-    st.write(finding.description)
+    st.markdown(md(finding.description))
     left, right = st.columns(2, gap="large")
     with left:
         st.markdown("**Original (approved label)**")
@@ -45,4 +46,4 @@ def render_finding_body(finding: Finding) -> None:
             "content). Check the source label before relying on this finding."
         )
     if finding.recommended_action:
-        st.info(f"**Recommended reviewer action:** {finding.recommended_action}")
+        st.info(f"**Recommended reviewer action:** {md(finding.recommended_action)}")

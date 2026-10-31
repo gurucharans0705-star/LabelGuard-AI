@@ -12,12 +12,17 @@ not flagged is a false negative. Not-evaluated items are informational and are n
 """
 from __future__ import annotations
 
+import argparse
+import platform
+import statistics
 import tempfile
-from dataclasses import dataclass, replace
+import time
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from labelguard.samples.synthetic_labels import APPROVED as A
-from labelguard.samples.synthetic_labels import LabelSpec, render_label_pdf
+from labelguard.samples.synthetic_labels import LabelSpec, make_scanned_copy, render_label_pdf
 from labelguard.verification import verify_pair
 
 
@@ -27,10 +32,15 @@ class Case:
     revised: LabelSpec
     expected: frozenset[str]  # rule ids that must be flagged, and no others
     note: str = ""
+    approved: LabelSpec = A  # the approved label (a different spec for multi-page cases)
+    scan_revised: bool = False  # the revised label is an image-only scan of the rendered spec
+    use_ocr: bool = True
+    needs_ocr: bool = False  # skipped (not counted) when OCR is unavailable
+    expected_not_evaluated: frozenset[str] = frozenset()  # rules that must say "could not verify" (never "passed")
 
 
-def _c(name: str, revised: LabelSpec, *rules: str, note: str = "") -> Case:
-    return Case(name, revised, frozenset(rules), note)
+def _c(name: str, revised: LabelSpec, *rules: str, note: str = "", **options) -> Case:
+    return Case(name, revised, frozenset(rules), note, **options)
 
 
 CORPUS: tuple[Case, ...] = (
@@ -63,10 +73,68 @@ CORPUS: tuple[Case, ...] = (
 )
 
 
+# Added on Day 4. Ground truth was written from the rule descriptions in config/rules.toml (what each rule is meant to
+# check) before these cases were run. Some cases were chosen to be harder than the original corpus (several changes at
+# once, changes on a second page, text read by OCR). The results, including any misses, are reported as they came out.
+_PAGE2 = ("Instructions", "Open the pouch.", "Connect the line.", "Prime the set.")
+_M = replace(A, extra_pages=(_PAGE2,))
+EXTRA_CASES: tuple[Case, ...] = (
+    _c("manufacturer address changed only", replace(A, address="99 Other Street, Sampletown, Exampleland"), "R-MFR-001"),
+    _c("product name changed only", replace(A, product_name="NW-IV200 Gravity Infusion Set (15 drops/mL)"), "R-NAME-001"),
+    _c("latex statement flipped", replace(A, warnings=(A.warnings[0], A.warnings[1], "Contains natural rubber latex.", A.warnings[3])),
+       "R-WARN-002", note="'no natural rubber latex' to 'natural rubber latex' is a safety-relevant rewording"),
+    _c("manufacturing date removed", replace(A, mfg_date=None), "R-DATE-002",
+       note="R-REQ-008 is disabled in the shipped config, so only the change rule applies"),
+    _c("two changes at once (REF and lot)", replace(A, ref="NW-IV200-99", lot="B25-0001"), "R-ID-001", "R-LOT-001"),
+    _c("multi-page label, identical", _M, approved=_M, note="three-line second page, no change"),
+    _c("multi-page label, page 2 text changed", replace(_M, extra_pages=(("Instructions", "Open the pouch.", "Disconnect the line.", "Prime the set."),)),
+       "R-TEXT-003", approved=_M, note="a reworded line is the 'Text modified' rule, not added + missing"),
+    _c("page removed from revised", A, "R-PAGE-001", "R-TEXT-002", approved=_M),
+)
+
+# Needs Tesseract OCR. The revised label is an image-only scan, so its text is read by OCR.
+OCR_CASES: tuple[Case, ...] = (
+    _c("OCR scan of the identical label", A, scan_revised=True, needs_ocr=True,
+       expected_not_evaluated=frozenset({"R-ART-001"}), note="artwork cannot be compared with a scan: must say 'not verified'"),
+    _c("OCR scan with REF changed", replace(A, ref="NW-IV200-99"), "R-ID-001", scan_revised=True, needs_ocr=True,
+       expected_not_evaluated=frozenset({"R-ART-001"})),
+    _c("OCR scan with warning removed", replace(A, warnings=A.warnings[:1] + A.warnings[2:]), "R-WARN-001",
+       scan_revised=True, needs_ocr=True, expected_not_evaluated=frozenset({"R-ART-001"})),
+)
+
+# Scan with OCR switched off: nothing readable, so nothing may be flagged and the reviewer must be told it was not verified.
+NO_OCR_CASES: tuple[Case, ...] = (
+    _c("scan, OCR switched off", A, scan_revised=True, use_ocr=False,
+       expected_not_evaluated=frozenset({"R-READ-001"}), note="must not report 16 false 'missing' findings"),
+)
+
+# Honest record of ground-truth edits. The first-draft expectations for two Day 4 cases were written without reading the
+# whole rules file; they contradicted the shipped configuration, so they were corrected (the engine was right). The first-run
+# result is kept here so the correction is visible and not silent.
+GROUND_TRUTH_CORRECTIONS: tuple[str, ...] = (
+    "'manufacturing date removed': first draft expected R-DATE-002 and R-REQ-008. R-REQ-008 ships with enabled = false "
+    "(the manufacturing date is not configured as required), so the engine's output (R-DATE-002 only) was right. Counted "
+    "in the first run as 1 false negative.",
+    "'multi-page label, page 2 text changed': first draft expected R-TEXT-001 + R-TEXT-002 (added + missing). The rules "
+    "file has a dedicated 'Text modified' rule, R-TEXT-003, for a reworded line, which is the better reading of this change. "
+    "Counted in the first run as 1 false positive and 2 false negatives.",
+    "Totals on the first run, before these two corrections: TP 38, FP 1, FN 3 (precision 0.974, recall 0.927, F1 0.950). "
+    "The corrected corpus gives a perfect score because the corpus is small and its author also wrote the ground truth; "
+    "treat that as a regression baseline, not as evidence of accuracy.",
+)
+
+EXTENDED_CORPUS: tuple[Case, ...] = CORPUS + EXTRA_CASES + NO_OCR_CASES
+FULL_CORPUS: tuple[Case, ...] = EXTENDED_CORPUS + OCR_CASES
+
+
 @dataclass(frozen=True)
 class CaseResult:
     case: Case
     flagged: frozenset[str]
+    not_evaluated: frozenset[str] = frozenset()  # rule ids that reported "could not be verified"
+    seconds: float | None = None  # wall time of the comparison (verify_pair), None if not measured
+    pages: tuple[int, int] = (0, 0)  # approved, revised
+    skipped: str = ""  # why the case was not run (e.g. OCR unavailable)
 
     @property
     def true_positives(self) -> frozenset[str]:
@@ -79,6 +147,11 @@ class CaseResult:
     @property
     def false_negatives(self) -> frozenset[str]:
         return self.case.expected - self.flagged
+
+    @property
+    def missing_not_evaluated(self) -> frozenset[str]:
+        """Rules that should have said "could not verify" but did not (a silent pass would be a defect)."""
+        return self.case.expected_not_evaluated - self.not_evaluated
 
 
 @dataclass(frozen=True)
@@ -97,22 +170,54 @@ class Metrics:
     def recall(self) -> float:
         return self.tp / (self.tp + self.fn) if self.tp + self.fn else 1.0
 
+    @property
+    def f1(self) -> float:
+        p, r = self.precision, self.recall
+        return 2 * p * r / (p + r) if p + r else 0.0
+
+
+def _ocr_available() -> bool:
+    from labelguard.extraction.ocr import get_ocr_status
+
+    return get_ocr_status().available
+
 
 def run_corpus(corpus: tuple[Case, ...] = CORPUS, *, run_visual: bool = True) -> list[CaseResult]:
-    results = []
+    """Run every case. A case that needs OCR is skipped (and says so) when OCR is not available."""
+    from labelguard.rules.models import RESULT_NOT_EVALUATED
+
+    results: list[CaseResult] = []
+    ocr = None  # looked up only if a case needs it
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
-        approved = render_label_pdf(A, root / "approved.pdf").read_bytes()
+        approved_cache: dict[LabelSpec, bytes] = {}
         for case in corpus:
+            if case.needs_ocr:
+                ocr = _ocr_available() if ocr is None else ocr
+                if not ocr:
+                    results.append(CaseResult(case, frozenset(), skipped="Tesseract OCR is not available on this machine"))
+                    continue
+            if case.approved not in approved_cache:
+                approved_cache[case.approved] = render_label_pdf(case.approved, root / "approved.pdf").read_bytes()
+            approved = approved_cache[case.approved]
             revised = render_label_pdf(case.revised, root / "revised.pdf").read_bytes()
-            report = verify_pair(
-                (approved, "approved.pdf"), (revised, "revised.pdf"), run_visual=run_visual, run_barcodes=True
-            ).report
-            results.append(CaseResult(case, frozenset(f.rule_id for f in report.flagged)))
+            if case.scan_revised:
+                revised = make_scanned_copy(revised)
+            started = time.perf_counter()
+            outcome = verify_pair((approved, "approved.pdf"), (revised, "revised.pdf"), run_visual=run_visual,
+                                  run_barcodes=True, use_ocr=case.use_ocr)
+            seconds = time.perf_counter() - started
+            report = outcome.report
+            results.append(CaseResult(
+                case, frozenset(f.rule_id for f in report.flagged),
+                frozenset(f.rule_id for f in report.findings if f.result == RESULT_NOT_EVALUATED),
+                seconds, (outcome.analysis.approved.document.page_count, outcome.analysis.revised.document.page_count),
+            ))
     return results
 
 
 def compute_metrics(results: list[CaseResult]) -> Metrics:
+    results = [r for r in results if not r.skipped]
     return Metrics(
         tp=sum(len(r.true_positives) for r in results),
         fp=sum(len(r.false_positives) for r in results),
@@ -122,15 +227,157 @@ def compute_metrics(results: list[CaseResult]) -> Metrics:
     )
 
 
-def format_report(results: list[CaseResult]) -> str:
-    metrics = compute_metrics(results)
-    lines = [f"{'Case':<40} {'TP':>3} {'FP':>3} {'FN':>3}  Detail"]
-    for r in results:
+# --- documents that must be refused (not part of precision / recall) -----------------------------------------------------
+@dataclass(frozen=True)
+class RobustnessResult:
+    name: str
+    refused: bool
+    message: str
+
+
+def run_robustness() -> list[RobustnessResult]:
+    """Malformed, encrypted and unsupported uploads must be refused with a clear message, never crash or be analysed."""
+    import pymupdf
+
+    from labelguard.extraction.pdf_text import ExtractionError
+    from labelguard.ingestion import ingest_pdf
+
+    with tempfile.TemporaryDirectory() as folder:
+        good = render_label_pdf(A, Path(folder) / "a.pdf").read_bytes()
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "secret")
+    encrypted = doc.tobytes(encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw="u", owner_pw="o")
+    cases = [
+        ("empty file", "a.pdf", b""),
+        ("text renamed to .pdf", "a.pdf", b"just some text"),
+        ("truncated PDF", "a.pdf", good[:200]),
+        ("corrupt PDF body", "a.pdf", b"%PDF-1.7\nnot really a pdf"),
+        ("password-protected PDF", "a.pdf", encrypted),
+        ("wrong extension", "a.txt", good),
+    ]
+    results = []
+    for name, filename, data in cases:
+        try:
+            ingest_pdf(data, filename)
+            results.append(RobustnessResult(name, False, "was accepted"))
+        except ExtractionError as exc:
+            results.append(RobustnessResult(name, True, str(exc)))
+        except Exception as exc:  # anything else is a crash, which counts as not handled
+            results.append(RobustnessResult(name, False, f"crashed: {exc.__class__.__name__}"))
+    return results
+
+
+# --- timing -------------------------------------------------------------------------------------------------------------
+def _timing_rows(results: list[CaseResult]) -> list[str]:
+    def row(label: str, items: list[CaseResult]) -> str:
+        times = sorted(r.seconds for r in items if r.seconds is not None)
+        if not times:
+            return f"| {label} | 0 | - | - | - |"
+        return f"| {label} | {len(times)} | {statistics.median(times):.2f} | {times[0]:.2f} | {times[-1]:.2f} |"
+
+    ran = [r for r in results if not r.skipped]
+    digital = [r for r in ran if not r.case.scan_revised and max(r.pages) == 1]
+    multi = [r for r in ran if not r.case.scan_revised and max(r.pages) > 1]
+    scans_ocr = [r for r in ran if r.case.scan_revised and r.case.use_ocr]
+    scans_off = [r for r in ran if r.case.scan_revised and not r.case.use_ocr]
+    return [
+        "| Kind of comparison | Pairs timed | Median s | Fastest s | Slowest s |", "|---|---|---|---|---|",
+        row("Digital, 1 page each", digital), row("Digital, 2 pages", multi),
+        row("Revised label is a scan, OCR on", scans_ocr), row("Revised label is a scan, OCR off", scans_off),
+    ]
+
+
+def machine_description() -> str:
+    from labelguard.extraction.ocr import get_ocr_status
+    import os
+
+    ocr = get_ocr_status()
+    return (f"{platform.system()} {platform.release()} ({platform.machine()}), {os.cpu_count()} logical CPUs, Python "
+            f"{platform.python_version()}; OCR: {'available' if ocr.available else 'not available'}")
+
+
+def format_markdown_report(results: list[CaseResult], robustness: list[RobustnessResult]) -> str:
+    """The evaluation report written to docs/EVALUATION_REPORT.md. Every number comes from this run."""
+    ran = [r for r in results if not r.skipped]
+    skipped = [r for r in results if r.skipped]
+    m = compute_metrics(results)
+    original = {c.name for c in CORPUS}
+    lines = [
+        "# LabelGuard AI - evaluation report (synthetic corpus)", "",
+        f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} by `python -m labelguard.evaluation --write docs/EVALUATION_REPORT.md`. "
+        "Re-run it on your own machine to get numbers for that machine.", "",
+        "> **What this is and is not.** The labels are fictional and generated by this project's own code, the ground truth was "
+        "written by the project author, and the corpus is small. These numbers show that the rules behave as intended on "
+        "these cases and that nothing regressed. They are **not** an estimate of accuracy on real labels, they have no "
+        "statistical significance, and they do not say anything about regulatory compliance.", "",
+        "## Definitions", "",
+        "- **Unit of evaluation:** one (label pair, rule) combination.",
+        "- **Positive finding:** a rule whose result is *flagged* for the pair. Results of *not evaluated* (\"could not be verified\") are "
+        "not positives and not negatives; they are checked separately (see below).",
+        "- **Ground truth:** for each pair, the set of rule ids that *should* be flagged, written from what the injected change means "
+        "and from the rule descriptions in `config/rules.toml`, before the case was run. A pair with no change has an empty set.",
+        "- **TP** flagged and expected; **FP** flagged but not expected; **FN** expected but not flagged. "
+        "**Precision** = TP/(TP+FP). **Recall** = TP/(TP+FN). **F1** = 2PR/(P+R). True negatives are not counted "
+        "(their number depends only on how many rules exist).",
+        "- **Exact case:** a pair with no FP and no FN.", "",
+        "## Results", "",
+        f"- Pairs run: **{len(ran)}** ({sum(1 for r in ran if r.case.name in original)} original corpus, "
+        f"{sum(1 for r in ran if r.case.name not in original)} added on Day 4); skipped: {len(skipped)}",
+        f"- **TP {m.tp}, FP {m.fp}, FN {m.fn}**",
+        f"- **Precision {m.precision:.3f}, Recall {m.recall:.3f}, F1 {m.f1:.3f}**",
+        f"- Exact cases: {m.exact_cases}/{m.cases}", "",
+        "| # | Pair | Pages | TP | FP | FN | Not verified as required | Detail |", "|---|---|---|---|---|---|---|---|",
+    ]
+    for number, r in enumerate(results, start=1):
+        if r.skipped:
+            lines.append(f"| {number} | {r.case.name} | - | - | - | - | - | **skipped**: {r.skipped} |")
+            continue
         detail = []
         if r.false_positives:
             detail.append("unexpected: " + ", ".join(sorted(r.false_positives)))
         if r.false_negatives:
             detail.append("missed: " + ", ".join(sorted(r.false_negatives)))
+        if r.missing_not_evaluated:
+            detail.append("should have said 'not verified': " + ", ".join(sorted(r.missing_not_evaluated)))
+        required = ("n/a" if not r.case.expected_not_evaluated else ("yes" if not r.missing_not_evaluated else "MISSING"))
+        lines.append(f"| {number} | {r.case.name} | {r.pages[0]}/{r.pages[1]} | {len(r.true_positives)} | {len(r.false_positives)} | "
+                     f"{len(r.false_negatives)} | {required} | {'; '.join(detail)} |")
+    lines += ["", "\"Not verified as required\": for scans, the artwork rule (or the readability rule when OCR is off) must say it could not "
+              "verify, never report a pass. `n/a` = nothing required for that pair.", ""]
+    lines += ["## Corrections to the ground truth", "",
+              "Two Day 4 expectations were wrong in the first draft and were corrected after the first run. They are listed so the "
+              "correction is visible. The engine was not changed.", ""]
+    lines += [f"- {text}" for text in GROUND_TRUTH_CORRECTIONS]
+    lines += ["", "## Documents that must be refused (not part of precision / recall)", "",
+              "| Document | Refused with a message | Message |", "|---|---|---|"]
+    for r in robustness:
+        lines.append(f"| {r.name} | {'yes' if r.refused else '**NO**'} | {r.message[:110]} |")
+    lines += ["", f"{sum(r.refused for r in robustness)}/{len(robustness)} refused.", "",
+              "## Processing time", "", f"Machine: {machine_description()}.",
+              f"Documents: {sum(1 for r in ran)} comparisons = {sum(1 for r in ran)} approved + {sum(1 for r in ran)} revised synthetic PDFs "
+              f"(one or two pages each, 160 x 130 mm label artwork; {sum(1 for r in ran if r.case.scan_revised)} of the revised files are image-only scans). "
+              "Time is the wall-clock time of `verify_pair` (text extraction, OCR when used, field and text comparison, barcodes, visual "
+              "comparison, rules) for one pair, measured once per pair after the pairs were rendered. Rendering the PDFs is not included.", ""]
+    lines += _timing_rows(results)
+    lines += ["", "These are single measurements on one development machine with a handful of small synthetic files; they show the order of "
+              "magnitude only. Real labels, bigger scans, other hardware and other OCR language data will differ.", ""]
+    return "\n".join(lines)
+
+
+def format_report(results: list[CaseResult]) -> str:
+    metrics = compute_metrics(results)
+    lines = [f"{'Case':<40} {'TP':>3} {'FP':>3} {'FN':>3}  Detail"]
+    for r in results:
+        if r.skipped:
+            lines.append(f"{r.case.name:<40} {'-':>3} {'-':>3} {'-':>3}  skipped: {r.skipped}")
+            continue
+        detail = []
+        if r.false_positives:
+            detail.append("unexpected: " + ", ".join(sorted(r.false_positives)))
+        if r.false_negatives:
+            detail.append("missed: " + ", ".join(sorted(r.false_negatives)))
+        if r.missing_not_evaluated:
+            detail.append("should have said 'not verified': " + ", ".join(sorted(r.missing_not_evaluated)))
         lines.append(
             f"{r.case.name:<40} {len(r.true_positives):>3} {len(r.false_positives):>3} "
             f"{len(r.false_negatives):>3}  {'; '.join(detail)}"
@@ -138,12 +385,26 @@ def format_report(results: list[CaseResult]) -> str:
     lines += [
         "",
         f"Cases matching exactly: {metrics.exact_cases}/{metrics.cases}",
-        f"Precision: {metrics.precision:.3f}   Recall: {metrics.recall:.3f}  "
+        f"Precision: {metrics.precision:.3f}   Recall: {metrics.recall:.3f}   F1: {metrics.f1:.3f}  "
         f"(TP {metrics.tp}, FP {metrics.fp}, FN {metrics.fn})",
         "Synthetic corpus: measures regression, not accuracy on real labels.",
     ]
     return "\n".join(lines)
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run the synthetic evaluation corpus.")
+    parser.add_argument("--write", metavar="PATH", help="write the Markdown evaluation report to this file")
+    args = parser.parse_args(argv)
+    results = run_corpus(FULL_CORPUS)
+    print(format_report(results))
+    if args.write:
+        report = format_markdown_report(results, run_robustness())
+        Path(args.write).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.write).write_text(report, encoding="utf-8")
+        print(f"\nReport written to {args.write}")
+    return 0
+
+
 if __name__ == "__main__":
-    print(format_report(run_corpus()))
+    raise SystemExit(main())

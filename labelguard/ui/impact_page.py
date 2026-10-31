@@ -18,6 +18,7 @@ from labelguard.impact.engine import ImpactError
 from labelguard.impact.models import Catalog, ImpactResult, ParameterChange
 from labelguard.impact.rules import ImpactRuleError
 from labelguard.reporting.export import impact_to_markdown
+from labelguard.ui.report_widget import render_report_download
 from labelguard.rules.models import SEVERITY_LABELS, SEVERITY_NOTE
 from labelguard.ui import state
 from labelguard.ui.style import page_header
@@ -33,6 +34,9 @@ def render_impact_page() -> None:
     page_header("Change Impact", "Which label records may need review when a product parameter changes")
     st.caption(SYNTHETIC_NOTICE)
     catalog = state.load_catalog()
+    if st.session_state.get("catalog_unreadable"):
+        st.warning("The product catalog could not be read (the database may be read-only, locked or damaged), "
+                   "so it is shown as empty. Your analysis results are not affected.")
     _render_demo_controls(catalog)
     if catalog.is_empty:
         return
@@ -57,7 +61,8 @@ def _render_demo_controls(catalog: Catalog) -> None:
         st.info("The product catalog is empty. Load the synthetic demonstration catalog to try change-impact analysis.")
         if st.button("Load synthetic demo catalog", type="primary", key="load_demo_catalog"):
             try:
-                count = catalog_db.load_demo_data()
+                with st.spinner("Loading the synthetic catalog..."):
+                    count = catalog_db.load_demo_data()
             except (sqlite3.Error, OSError):
                 st.error("The demo catalog could not be saved (the database may be read-only or locked).")
                 return
@@ -144,10 +149,11 @@ def _render_what_if(catalog: Catalog) -> None:
 
 def _run(catalog: Catalog, change: ParameterChange, *, source: str) -> None:
     try:
-        result, run_uid = workflow.run_impact_analysis(
-            catalog, change, source=source, job_uid=st.session_state.get("job_uid") if source == "analysis" else None,
-            actor=state.get_reviewer() or "system",
-        )
+        with st.spinner("Analyzing the impact of the change..."):
+            result, run_uid = workflow.run_impact_analysis(
+                catalog, change, source=source, job_uid=st.session_state.get("job_uid") if source == "analysis" else None,
+                actor=state.get_reviewer() or "system",
+            )
     except ImpactError as exc:
         st.error(str(exc))
         return
@@ -214,10 +220,9 @@ def _render_result(result: ImpactResult, run_uid: str, catalog: Catalog) -> None
             st.dataframe(pd.DataFrame([{"Label": f"{x.label.label_code} v{x.label.version}", "Record": x.label.label_id,
                                         "Market": catalog.market_name(x.label.market_code), "Reason": x.reason}
                                        for x in result.excluded]), hide_index=True, width="stretch")
-    report = impact_to_markdown(result, catalog)
-    st.download_button(
-        "Download impact report (Markdown)", report, file_name="labelguard_impact_report.md", mime="text/markdown",
-        key="download_impact_report", on_click=state.log_report, args=("Impact report", "labelguard_impact_report.md", report),
+    render_report_download(
+        "Download impact report (Markdown)", lambda: impact_to_markdown(result, catalog), kind="Impact report",
+        filename="labelguard_impact_report.md", mime="text/markdown", key="download_impact_report",
     )
 
 
